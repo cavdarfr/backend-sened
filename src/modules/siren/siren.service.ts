@@ -1,136 +1,93 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import {
-    stripNonDigits,
-    calculateVatNumber,
-    detectQueryType,
-} from '../../shared/utils/business-identifiers.util';
+    Injectable,
+    BadRequestException,
+    NotFoundException,
+    Logger,
+    OnModuleInit,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { stripNonDigits, detectQueryType } from '../../shared/utils/business-identifiers.util';
+import { GouvRechercheEntreprisesProvider, type GouvUpstreamSearchResponse } from './gouv-recherche-entreprises.provider';
+import { InseeSireneProvider } from './insee-sirene.provider';
+import { SirenRateLimitError } from './siren.types';
+import type { SirenSearchResult } from './siren.types';
 
-const DEFAULT_RETRY_AFTER_SECONDS = 60;
+export { SirenRateLimitError, type SirenSearchResult } from './siren.types';
+
 const RESULTS_CACHE_TTL_MS = 60 * 60 * 1000;
 const EMPTY_RESULTS_CACHE_TTL_MS = 10 * 60 * 1000;
-
-export class SirenRateLimitError extends Error {
-    constructor(
-        public readonly retryAfterSeconds: number,
-        message = `Recherche temporairement indisponible, réessayez dans ${retryAfterSeconds} s.`,
-    ) {
-        super(message);
-        this.name = 'SirenRateLimitError';
-    }
-}
-
-/**
- * Interface pour les résultats de recherche SIREN/SIRET
- */
-export interface SirenSearchResult {
-    siren: string;
-    siret: string;
-    company_name: string;
-    vat_number: string;
-    address: string;
-    postal_code: string;
-    city: string;
-    country_code: string;
-    legal_form: string;
-    naf_code: string;
-    creation_date: string;
-}
-
-/**
- * Interface pour la réponse de l'API recherche-entreprises.api.gouv.fr
- */
-interface ApiRechercheEntrepriseResponse {
-    results: Array<{
-        siren: string;
-        nom_complet: string;
-        nom_raison_sociale?: string;
-        nature_juridique?: string;
-        date_creation?: string;
-        siege: {
-            siret: string;
-            activite_principale?: string;
-            adresse?: string;
-            code_postal?: string;
-            libelle_commune?: string;
-            numero_voie?: string;
-            type_voie?: string;
-            libelle_voie?: string;
-            complement_adresse?: string;
-        };
-    }>;
-    total_results: number;
-}
 
 interface CachedLookupEntry {
     expiresAt: number;
     data: SirenSearchResult[];
 }
 
-interface UpstreamSearchResponse {
-    status: number;
-    data: ApiRechercheEntrepriseResponse | null;
-}
-
 @Injectable()
-export class SirenService {
-    private readonly API_BASE_URL = 'https://recherche-entreprises.api.gouv.fr';
+export class SirenService implements OnModuleInit {
+    private readonly logger = new Logger(SirenService.name);
     private readonly USER_AGENT = `SenedBackend/1.0 (${process.env.NODE_ENV ?? 'development'})`;
     private readonly queryCache = new Map<string, CachedLookupEntry>();
     private readonly inFlightQueries = new Map<string, Promise<SirenSearchResult[]>>();
     private cooldownUntil = 0;
 
-    /**
-     * Construit l'adresse complète à partir des composants
-     */
-    private buildAddress(siege: {
-        numero_voie?: string;
-        type_voie?: string;
-        libelle_voie?: string;
-        complement_adresse?: string;
-        adresse?: string;
-    }): string {
-        // Si l'adresse complète est fournie, l'utiliser
-        if (siege.adresse) {
-            // Extraire juste la partie rue (avant le code postal)
-            const match = siege.adresse.match(/^(.+?)\s+\d{5}/);
-            if (match) {
-                return match[1];
+    private gouvProvider: GouvRechercheEntreprisesProvider | null = null;
+    private inseeProvider: InseeSireneProvider | null = null;
+
+    constructor(private readonly configService: ConfigService) {}
+
+    onModuleInit(): void {
+        if (this.isInseeProvider()) {
+            const key = this.configService.get<string>('INSEE_SIRENE_API_KEY')?.trim();
+            if (!key) {
+                throw new Error(
+                    'INSEE_SIRENE_API_KEY is required when SIREN_PROVIDER=insee',
+                );
             }
-            return siege.adresse;
+            this.logger.log('SIREN provider: INSEE (API Sirene)');
+        } else {
+            this.logger.log('SIREN provider: recherche-entreprises (gouv)');
         }
-
-        const parts = [];
-        if (siege.numero_voie) parts.push(siege.numero_voie);
-        if (siege.type_voie) parts.push(siege.type_voie);
-        if (siege.libelle_voie) parts.push(siege.libelle_voie);
-
-        let address = parts.join(' ');
-
-        if (siege.complement_adresse) {
-            address += `, ${siege.complement_adresse}`;
-        }
-
-        return address;
     }
 
-    /**
-     * Transforme un résultat brut de l'API en SirenSearchResult normalisé.
-     */
-    private mapEntreprise(entreprise: ApiRechercheEntrepriseResponse['results'][0]): SirenSearchResult {
-        const siege = entreprise.siege;
-        return {
-            siren: entreprise.siren,
-            siret: siege.siret,
-            company_name: entreprise.nom_complet || entreprise.nom_raison_sociale || '',
-            vat_number: calculateVatNumber(entreprise.siren),
-            address: this.buildAddress(siege),
-            postal_code: siege.code_postal || '',
-            city: siege.libelle_commune || '',
-            country_code: 'FR',
-            legal_form: entreprise.nature_juridique || '',
-            naf_code: siege.activite_principale || '',
-            creation_date: entreprise.date_creation || '',
-        };
+    private isInseeProvider(): boolean {
+        const v = (this.configService.get<string>('SIREN_PROVIDER') ?? 'gouv').trim().toLowerCase();
+        return v === 'insee';
+    }
+
+    private getGouv(): GouvRechercheEntreprisesProvider {
+        if (!this.gouvProvider) {
+            this.gouvProvider = new GouvRechercheEntreprisesProvider(this.USER_AGENT, (seconds) => {
+                this.cooldownUntil = Date.now() + seconds * 1000;
+            });
+        }
+        return this.gouvProvider;
+    }
+
+    private getInsee(): InseeSireneProvider {
+        if (!this.inseeProvider) {
+            const key = this.configService.get<string>('INSEE_SIRENE_API_KEY')?.trim();
+            if (!key) {
+                throw new BadRequestException(
+                    'Configuration INSEE incomplète : INSEE_SIRENE_API_KEY manquante',
+                );
+            }
+            const baseUrl =
+                this.configService.get<string>('INSEE_SIRENE_BASE_URL')?.trim() ||
+                'https://api.insee.fr/api-sirene/3.11';
+            const header =
+                this.configService.get<string>('INSEE_SIRENE_API_KEY_HEADER')?.trim() ||
+                'X-INSEE-Api-Key-Integration';
+            this.inseeProvider = new InseeSireneProvider(
+                baseUrl,
+                key,
+                header,
+                this.USER_AGENT,
+                (seconds) => {
+                    this.cooldownUntil = Date.now() + seconds * 1000;
+                },
+            );
+        }
+        return this.inseeProvider;
     }
 
     private getCacheKey(query: string, limit: number): string {
@@ -166,74 +123,21 @@ export class SirenService {
         return Math.max(1, Math.ceil((this.cooldownUntil - Date.now()) / 1000));
     }
 
-    private parseRetryAfterSeconds(retryAfter: string | null): number {
-        if (!retryAfter) {
-            return DEFAULT_RETRY_AFTER_SECONDS;
-        }
-
-        const parsedSeconds = Number.parseInt(retryAfter, 10);
-        if (Number.isFinite(parsedSeconds) && parsedSeconds > 0) {
-            return parsedSeconds;
-        }
-
-        const parsedDate = Date.parse(retryAfter);
-        if (!Number.isNaN(parsedDate)) {
-            const seconds = Math.ceil((parsedDate - Date.now()) / 1000);
-            if (seconds > 0) {
-                return seconds;
-            }
-        }
-
-        return DEFAULT_RETRY_AFTER_SECONDS;
-    }
-
-    private async fetchUpstreamSearch(query: string, limit: number): Promise<UpstreamSearchResponse> {
-        const response = await fetch(
-            `${this.API_BASE_URL}/search?q=${encodeURIComponent(query)}&per_page=${limit}`,
-            {
-                headers: {
-                    'User-Agent': this.USER_AGENT,
-                },
-            },
-        );
-
-        if (response.status === 429) {
-            const retryAfterSeconds = this.parseRetryAfterSeconds(response.headers.get('Retry-After'));
-            this.cooldownUntil = Date.now() + retryAfterSeconds * 1000;
-            console.warn(
-                `[SIREN] upstream rate limit status=429 query="${query}" retry_after=${retryAfterSeconds}s`,
-            );
-            throw new SirenRateLimitError(retryAfterSeconds);
-        }
-
-        if (!response.ok) {
-            return {
-                status: response.status,
-                data: null,
-            };
-        }
-
-        return {
-            status: response.status,
-            data: await response.json() as ApiRechercheEntrepriseResponse,
-        };
-    }
-
-    private async executeTextSearch(query: string, limit: number, cacheKey: string): Promise<SirenSearchResult[]> {
-        const cached = this.getCachedResults(cacheKey);
-        if (cached) {
-            return cached;
-        }
-
+    private async executeTextSearchGouv(
+        query: string,
+        limit: number,
+        cacheKey: string,
+    ): Promise<SirenSearchResult[]> {
+        const gouv = this.getGouv();
         const retryAfterSeconds = this.getRemainingCooldownSeconds();
         if (retryAfterSeconds > 0) {
             throw new SirenRateLimitError(retryAfterSeconds);
         }
 
-        const upstream = await this.fetchUpstreamSearch(query.trim(), limit);
+        const upstream: GouvUpstreamSearchResponse = await gouv.fetchSearch(query.trim(), limit);
         if ([400, 404].includes(upstream.status)) {
             console.warn(
-                `[SIREN] upstream lookup returned ${upstream.status} for query "${query.trim()}"`,
+                `[SIREN/gouv] upstream lookup returned ${upstream.status} for query "${query.trim()}"`,
             );
             this.setCachedResults(cacheKey, []);
             return [];
@@ -243,9 +147,36 @@ export class SirenService {
             throw new BadRequestException('Erreur lors de la recherche');
         }
 
-        const results = upstream.data.results.map((entreprise) => this.mapEntreprise(entreprise));
+        const results = upstream.data.results.map((entreprise) => gouv.mapEntreprise(entreprise));
         this.setCachedResults(cacheKey, results);
         return results;
+    }
+
+    private async executeTextSearchInsee(
+        query: string,
+        limit: number,
+        cacheKey: string,
+    ): Promise<SirenSearchResult[]> {
+        const retryAfterSeconds = this.getRemainingCooldownSeconds();
+        if (retryAfterSeconds > 0) {
+            throw new SirenRateLimitError(retryAfterSeconds);
+        }
+
+        const results = await this.getInsee().searchByText(query, limit);
+        this.setCachedResults(cacheKey, results);
+        return results;
+    }
+
+    private async executeTextSearch(query: string, limit: number, cacheKey: string): Promise<SirenSearchResult[]> {
+        const cached = this.getCachedResults(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
+        if (this.isInseeProvider()) {
+            return this.executeTextSearchInsee(query, limit, cacheKey);
+        }
+        return this.executeTextSearchGouv(query, limit, cacheKey);
     }
 
     /**
@@ -254,17 +185,15 @@ export class SirenService {
     async search(sirenOrSiret: string): Promise<SirenSearchResult> {
         const cleanedNumber = stripNonDigits(sirenOrSiret);
 
-        // Valider la longueur
         if (cleanedNumber.length !== 9 && cleanedNumber.length !== 14) {
             throw new BadRequestException(
-                'Le numéro doit être un SIREN (9 chiffres) ou un SIRET (14 chiffres)'
+                'Le numéro doit être un SIREN (9 chiffres) ou un SIRET (14 chiffres)',
             );
         }
 
         try {
-            // Utiliser l'API recherche-entreprises avec le SIREN (9 premiers chiffres)
             const siren = cleanedNumber.substring(0, 9);
-            const cacheKey = this.getCacheKey(`exact:${siren}`, 1);
+            const cacheKey = this.getCacheKey(`exact:${cleanedNumber}`, 1);
             const cached = this.getCachedResults(cacheKey);
             if (cached?.[0]) {
                 return cached[0];
@@ -275,7 +204,17 @@ export class SirenService {
                 throw new SirenRateLimitError(retryAfterSeconds);
             }
 
-            const upstream = await this.fetchUpstreamSearch(siren, 1);
+            if (this.isInseeProvider()) {
+                const result =
+                    cleanedNumber.length === 14
+                        ? await this.getInsee().searchBySiret(cleanedNumber)
+                        : await this.getInsee().searchBySiren(cleanedNumber);
+                this.setCachedResults(cacheKey, [result]);
+                return result;
+            }
+
+            const gouv = this.getGouv();
+            const upstream = await gouv.fetchSearch(siren, 1);
 
             if (upstream.status === 404) {
                 throw new NotFoundException('Entreprise non trouvée');
@@ -291,7 +230,7 @@ export class SirenService {
                 throw new NotFoundException('Entreprise non trouvée');
             }
 
-            const result = this.mapEntreprise(data.results[0]);
+            const result = gouv.mapEntreprise(data.results[0]);
             this.setCachedResults(cacheKey, [result]);
             return result;
         } catch (error) {
