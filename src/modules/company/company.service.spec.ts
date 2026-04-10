@@ -1,9 +1,12 @@
-import { ForbiddenException } from '@nestjs/common';
-import { getSupabaseAdmin } from '../../config/supabase.config';
-import { type CompanyOwnerRole, type CompanyRole } from '../../common/roles/roles';
-import { CompanyService } from './company.service';
+import { ForbiddenException } from "@nestjs/common";
+import { getSupabaseAdmin } from "../../config/supabase.config";
+import {
+  type CompanyOwnerRole,
+  type CompanyRole,
+} from "../../common/roles/roles";
+import { CompanyService } from "./company.service";
 
-jest.mock('../../config/supabase.config', () => ({
+jest.mock("../../config/supabase.config", () => ({
   getSupabaseAdmin: jest.fn(),
 }));
 
@@ -26,10 +29,10 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
   return {
     supabase: {
       from: jest.fn((table: string) => {
-        if (table === 'profiles') {
+        if (table === "profiles") {
           return {
             select: jest.fn((columns: string) => {
-              if (columns === 'id') {
+              if (columns === "id") {
                 return {
                   ilike: jest.fn().mockReturnValue({
                     maybeSingle: jest.fn().mockResolvedValue({
@@ -41,11 +44,11 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
                 };
               }
 
-              if (columns === 'first_name, last_name') {
+              if (columns === "first_name, last_name") {
                 return {
                   eq: jest.fn().mockReturnValue({
                     single: jest.fn().mockResolvedValue({
-                      data: { first_name: 'Jane', last_name: 'Doe' },
+                      data: { first_name: "Jane", last_name: "Doe" },
                     }),
                   }),
                 };
@@ -56,23 +59,23 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
           };
         }
 
-        if (table === 'company_invitations') {
+        if (table === "company_invitations") {
           return {
             select: jest.fn((columns?: string) => {
-              if (columns?.includes('company_id, email, role, token')) {
+              if (columns?.includes("company_id, email, role, token")) {
                 return {
                   eq: jest.fn().mockReturnValue({
                     eq: jest.fn().mockReturnValue({
                       maybeSingle: jest.fn().mockResolvedValue({
                         data: {
-                          id: 'invite-1',
-                          company_id: 'company-1',
-                          email: 'member@example.com',
-                          role: 'merchant_consultant',
-                          token: 'token-1',
-                          invited_by: 'user-1',
-                          expires_at: '2026-04-15T10:00:00.000Z',
-                          invitation_type: 'member',
+                          id: "invite-1",
+                          company_id: "company-1",
+                          email: "member@example.com",
+                          role: "merchant_consultant",
+                          token: "token-1",
+                          invited_by: "user-1",
+                          expires_at: "2026-04-15T10:00:00.000Z",
+                          invitation_type: "member",
                         },
                       }),
                     }),
@@ -100,8 +103,8 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
                 select: jest.fn().mockReturnValue({
                   single: jest.fn().mockResolvedValue({
                     data: {
-                      id: 'invite-1',
-                      token: 'token-1',
+                      id: "invite-1",
+                      token: "token-1",
                       email: payload.email,
                       role: payload.role,
                     },
@@ -113,20 +116,20 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
           };
         }
 
-        if (table === 'companies') {
+        if (table === "companies") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
                 single: jest.fn().mockResolvedValue({
                   data: {
-                    name: 'Acme',
-                    email: 'contact@acme.test',
-                    phone: '0102030405',
-                    address: '1 rue Exemple',
-                    postal_code: '75001',
-                    city: 'Paris',
-                    siren: '123456789',
-                    logo_url: 'https://cdn.example.com/acme-logo.png',
+                    name: "Acme",
+                    email: "contact@acme.test",
+                    phone: "0102030405",
+                    address: "1 rue Exemple",
+                    postal_code: "75001",
+                    city: "Paris",
+                    siren: "123456789",
+                    logo_url: "https://cdn.example.com/acme-logo.png",
                   },
                 }),
               }),
@@ -134,7 +137,7 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
           };
         }
 
-        if (table === 'user_companies') {
+        if (table === "user_companies") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
@@ -155,24 +158,26 @@ function createInviteSupabaseMock(options?: { existingUserId?: string }) {
   };
 }
 
-function createCancelInvitationSupabaseMock(role: CompanyRole = 'merchant_consultant') {
+function createCancelInvitationSupabaseMock(
+  role: CompanyRole = "merchant_consultant",
+) {
   return {
     from: jest.fn((table: string) => {
-      if (table === 'company_invitations') {
+      if (table === "company_invitations") {
         return {
           select: jest.fn(() => ({
             eq: jest.fn().mockReturnValue({
               eq: jest.fn().mockReturnValue({
                 maybeSingle: jest.fn().mockResolvedValue({
                   data: {
-                    id: 'invite-1',
-                    company_id: 'company-1',
-                    email: 'member@example.com',
+                    id: "invite-1",
+                    company_id: "company-1",
+                    email: "member@example.com",
                     role,
-                    token: 'token-1',
-                    invited_by: 'user-1',
-                    expires_at: '2026-04-15T10:00:00.000Z',
-                    invitation_type: 'member',
+                    token: "token-1",
+                    invited_by: "user-1",
+                    expires_at: "2026-04-15T10:00:00.000Z",
+                    invitation_type: "member",
                   },
                 }),
               }),
@@ -188,7 +193,7 @@ function createCancelInvitationSupabaseMock(role: CompanyRole = 'merchant_consul
   };
 }
 
-describe('CompanyService member management permissions', () => {
+describe("CompanyService member management permissions", () => {
   let service: CompanyService;
   let notificationService: { sendInviteEmail: jest.Mock };
   let subscriptionService: { syncMemberQuantity: jest.Mock };
@@ -222,7 +227,9 @@ describe('CompanyService member management permissions', () => {
   });
 
   function mockUserRole(role: CompanyRole) {
-    return jest.spyOn(service as any, 'checkUserAccess').mockResolvedValue(role);
+    return jest
+      .spyOn(service as any, "checkUserAccess")
+      .mockResolvedValue(role);
   }
 
   function mockUserAccessContext(
@@ -230,296 +237,417 @@ describe('CompanyService member management permissions', () => {
     companyOwnerRole: CompanyOwnerRole,
   ) {
     return jest
-      .spyOn(service as any, 'checkUserAccessContext')
+      .spyOn(service as any, "checkUserAccessContext")
       .mockResolvedValue({
         role,
         companyOwnerRole,
-        companyOwnerId: 'owner-1',
-        isCabinet: companyOwnerRole === 'accountant',
-        isMerchantCompany: companyOwnerRole === 'merchant_admin',
+        companyOwnerId: "owner-1",
+        isCabinet: companyOwnerRole === "accountant",
+        isMerchantCompany: companyOwnerRole === "merchant_admin",
       });
   }
 
-  it.each([
-    'merchant_admin',
-    'merchant_consultant',
-  ] as CompanyRole[])(
-    'allows merchant_admin to invite the %s role',
+  it.each(["merchant_admin", "merchant_consultant"] as CompanyRole[])(
+    "allows merchant_admin to invite the %s role",
     async (invitedRole) => {
       const inviteMock = createInviteSupabaseMock();
 
       jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-      mockUserAccessContext('merchant_admin', 'merchant_admin');
+      mockUserAccessContext("merchant_admin", "merchant_admin");
 
       const result = await service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
         invitedRole,
-        'admin@example.com',
+        "admin@example.com",
       );
 
-      expect(result.status).toBe('pending');
+      expect(result.status).toBe("pending");
       expect(inviteMock.getInsertedPayload()).toMatchObject({
-        company_id: 'company-1',
-        email: 'member@example.com',
+        company_id: "company-1",
+        email: "member@example.com",
         role: invitedRole,
-        invited_by: 'user-1',
+        invited_by: "user-1",
       });
       expect(notificationService.sendInviteEmail).toHaveBeenCalledWith(
-        'member@example.com',
-        'Jane Doe',
+        "member@example.com",
+        "Jane Doe",
         expect.objectContaining({
-          logo_url: 'https://cdn.example.com/acme-logo.png',
+          logo_url: "https://cdn.example.com/acme-logo.png",
         }),
         invitedRole,
-        'token-1',
+        "token-1",
       );
       expect(subscriptionService.syncMemberQuantity).toHaveBeenCalledWith(
-        'company-1',
+        "company-1",
       );
     },
   );
 
-  it('does not roll back a pending merchant invitation when SEPA member sync succeeds', async () => {
+  it("does not roll back a pending merchant invitation when SEPA member sync succeeds", async () => {
     const inviteMock = createInviteSupabaseMock();
     const rollbackSpy = jest
-      .spyOn(service as any, 'rollbackPendingMemberInvitation')
+      .spyOn(service as any, "rollbackPendingMemberInvitation")
       .mockResolvedValue(undefined);
 
     subscriptionService.syncMemberQuantity.mockResolvedValue(undefined);
 
     jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-    mockUserAccessContext('merchant_admin', 'merchant_admin');
+    mockUserAccessContext("merchant_admin", "merchant_admin");
 
     const result = await service.inviteMember(
-      'user-1',
-      'company-1',
-      'member@example.com',
-      'merchant_consultant',
-      'admin@example.com',
+      "user-1",
+      "company-1",
+      "member@example.com",
+      "merchant_consultant",
+      "admin@example.com",
     );
 
-    expect(result.status).toBe('pending');
+    expect(result.status).toBe("pending");
     expect(rollbackSpy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    'accountant',
-    'accountant_consultant',
-  ] as CompanyRole[])(
-    'rejects merchant_admin invitation for %s in a merchant company',
+  it.each(["accountant", "accountant_consultant"] as CompanyRole[])(
+    "rejects merchant_admin invitation for %s in a merchant company",
     async (invitedRole) => {
       jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-      mockUserAccessContext('merchant_admin', 'merchant_admin');
+      mockUserAccessContext("merchant_admin", "merchant_admin");
 
       await expect(
         service.inviteMember(
-          'user-1',
-          'company-1',
-          'member@example.com',
+          "user-1",
+          "company-1",
+          "member@example.com",
           invitedRole,
-          'admin@example.com',
+          "admin@example.com",
         ),
       ).rejects.toThrow(
         new ForbiddenException(
-          'Rôle d’invitation non autorisé pour cette entreprise',
+          "Rôle d’invitation non autorisé pour cette entreprise",
         ),
       );
     },
   );
 
-  it('rolls back a pending merchant invitation when billing sync fails', async () => {
+  it("rolls back a pending merchant invitation when billing sync fails", async () => {
     const inviteMock = createInviteSupabaseMock();
     const rollbackSpy = jest
-      .spyOn(service as any, 'rollbackPendingMemberInvitation')
+      .spyOn(service as any, "rollbackPendingMemberInvitation")
       .mockResolvedValue(undefined);
 
     subscriptionService.syncMemberQuantity.mockRejectedValue(
-      new Error('Stripe sync failed'),
+      new Error("Stripe sync failed"),
     );
 
     jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-    mockUserAccessContext('merchant_admin', 'merchant_admin');
+    mockUserAccessContext("merchant_admin", "merchant_admin");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'merchant_consultant',
-        'admin@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "merchant_consultant",
+        "admin@example.com",
       ),
     ).rejects.toThrow(
       "L'ajout du membre n'a pas pu être finalisé car la mise à jour de la facturation a échoué.",
     );
 
-    expect(rollbackSpy).toHaveBeenCalledWith(inviteMock.supabase, 'invite-1');
+    expect(rollbackSpy).toHaveBeenCalledWith(inviteMock.supabase, "invite-1");
     expect(notificationService.sendInviteEmail).not.toHaveBeenCalled();
   });
 
-  it('allows accountant to invite cabinet members in a cabinet', async () => {
+  it("allows accountant to invite cabinet members in a cabinet", async () => {
     const inviteMock = createInviteSupabaseMock();
 
     jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-    mockUserAccessContext('accountant', 'accountant');
+    mockUserAccessContext("accountant", "accountant");
 
     const result = await service.inviteMember(
-      'user-1',
-      'company-1',
-      'member@example.com',
-      'accountant_consultant',
-      'accountant@example.com',
+      "user-1",
+      "company-1",
+      "member@example.com",
+      "accountant_consultant",
+      "accountant@example.com",
     );
 
-    expect(result.status).toBe('pending');
+    expect(result.status).toBe("pending");
     expect(inviteMock.getInsertedPayload()).toMatchObject({
-      role: 'accountant_consultant',
+      role: "accountant_consultant",
     });
   });
 
-  it('does not sync billing when a cabinet invitation is auto-accepted', async () => {
-    const inviteMock = createInviteSupabaseMock({ existingUserId: 'member-1' });
+  it("allows accountant to invite a merchant_admin for a linked client", async () => {
+    const inviteMock = createInviteSupabaseMock();
 
     jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-    mockUserAccessContext('accountant', 'accountant');
+    mockUserRole("accountant");
+    jest
+      .spyOn(service as any, "assertLinkedClientForAccountant")
+      .mockResolvedValue(undefined);
 
-    const result = await service.inviteMember(
-      'user-1',
-      'company-1',
-      'member@example.com',
-      'accountant_consultant',
-      'accountant@example.com',
+    const result = await service.inviteLinkedClientMerchantAdmin(
+      "user-1",
+      "cabinet-1",
+      "client-1",
+      "merchant-admin@example.com",
     );
 
-    expect(result.status).toBe('accepted');
+    expect(result.status).toBe("pending");
+    expect(inviteMock.getInsertedPayload()).toMatchObject({
+      company_id: "client-1",
+      email: "merchant-admin@example.com",
+      role: "merchant_admin",
+      invited_by: "user-1",
+    });
+    expect(notificationService.sendInviteEmail).toHaveBeenCalledWith(
+      "merchant-admin@example.com",
+      "Jane Doe",
+      expect.objectContaining({
+        name: "Acme",
+      }),
+      "merchant_admin",
+      "token-1",
+    );
+    expect(subscriptionService.syncMemberQuantity).toHaveBeenCalledWith(
+      "client-1",
+    );
+  });
+
+  it("rejects linked client merchant admin invitations for accountant_consultant", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
+    mockUserRole("accountant_consultant");
+
+    await expect(
+      service.inviteLinkedClientMerchantAdmin(
+        "user-1",
+        "cabinet-1",
+        "client-1",
+        "merchant-admin@example.com",
+      ),
+    ).rejects.toThrow(
+      new ForbiddenException(
+        "Seul un expert-comptable administrateur peut gérer les invitations admin marchand de ce dossier client",
+      ),
+    );
+  });
+
+  it("rejects linked client merchant admin invitations when the client is not linked", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
+    mockUserRole("accountant");
+    jest
+      .spyOn(service as any, "assertLinkedClientForAccountant")
+      .mockRejectedValue(
+        new Error("Client non trouvé ou non lié à votre cabinet"),
+      );
+
+    await expect(
+      service.inviteLinkedClientMerchantAdmin(
+        "user-1",
+        "cabinet-1",
+        "client-1",
+        "merchant-admin@example.com",
+      ),
+    ).rejects.toThrow("Client non trouvé ou non lié à votre cabinet");
+  });
+
+  it("lists pending merchant_admin invitations for a linked client", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({
+      from: jest.fn((table: string) => {
+        if (table === "company_invitations") {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn().mockReturnValue({
+                eq: jest.fn().mockReturnValue({
+                  is: jest.fn().mockReturnValue({
+                    gt: jest.fn().mockReturnValue({
+                      order: jest.fn().mockResolvedValue({
+                        data: [
+                          {
+                            id: "invite-1",
+                            email: "merchant-admin@example.com",
+                            role: "merchant_admin",
+                            created_at: "2026-04-10T09:00:00.000Z",
+                            expires_at: "2026-04-17T09:00:00.000Z",
+                          },
+                        ],
+                        error: null,
+                      }),
+                    }),
+                  }),
+                }),
+              }),
+            })),
+          };
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+    } as any);
+    mockUserRole("accountant");
+    jest
+      .spyOn(service as any, "assertLinkedClientForAccountant")
+      .mockResolvedValue(undefined);
+
+    await expect(
+      service.getLinkedClientMerchantAdminInvitations(
+        "user-1",
+        "cabinet-1",
+        "client-1",
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "invite-1",
+        email: "merchant-admin@example.com",
+        role: "merchant_admin",
+      }),
+    ]);
+  });
+
+  it("does not sync billing when a cabinet invitation is auto-accepted", async () => {
+    const inviteMock = createInviteSupabaseMock({ existingUserId: "member-1" });
+
+    jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
+    mockUserAccessContext("accountant", "accountant");
+
+    const result = await service.inviteMember(
+      "user-1",
+      "company-1",
+      "member@example.com",
+      "accountant_consultant",
+      "accountant@example.com",
+    );
+
+    expect(result.status).toBe("accepted");
     expect(subscriptionService.syncMemberQuantity).not.toHaveBeenCalled();
   });
 
-  it('rejects cabinet invitations for accountant_consultant', async () => {
+  it("rejects cabinet invitations for accountant_consultant", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('accountant_consultant', 'accountant');
+    mockUserAccessContext("accountant_consultant", "accountant");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'accountant_consultant',
-        'collaborator@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "accountant_consultant",
+        "collaborator@example.com",
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet',
+        "Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet",
       ),
     );
   });
 
-  it('allows the configured root superadmin to invite a superadmin', async () => {
-    process.env.SUPERADMIN_ROOT_EMAIL = 'root@example.com';
+  it("allows the configured root superadmin to invite a superadmin", async () => {
+    process.env.SUPERADMIN_ROOT_EMAIL = "root@example.com";
 
     const inviteMock = createInviteSupabaseMock();
 
     jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
-    mockUserAccessContext('superadmin', 'merchant_admin');
+    mockUserAccessContext("superadmin", "merchant_admin");
 
     const result = await service.inviteMember(
-      'user-1',
-      'company-1',
-      'member@example.com',
-      'superadmin',
-      'ROOT@example.com',
+      "user-1",
+      "company-1",
+      "member@example.com",
+      "superadmin",
+      "ROOT@example.com",
     );
 
-    expect(result.status).toBe('pending');
+    expect(result.status).toBe("pending");
     expect(inviteMock.getInsertedPayload()).toMatchObject({
-      role: 'superadmin',
+      role: "superadmin",
     });
   });
 
-  it('rejects superadmin invitations from a non-root merchant admin', async () => {
-    process.env.SUPERADMIN_ROOT_EMAIL = 'root@example.com';
+  it("rejects superadmin invitations from a non-root merchant admin", async () => {
+    process.env.SUPERADMIN_ROOT_EMAIL = "root@example.com";
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('merchant_admin', 'merchant_admin');
+    mockUserAccessContext("merchant_admin", "merchant_admin");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'superadmin',
-        'admin@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "superadmin",
+        "admin@example.com",
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul le compte superadmin racine peut inviter un superadmin',
+        "Seul le compte superadmin racine peut inviter un superadmin",
       ),
     );
   });
 
-  it('rejects superadmin invitations from a non-root superadmin', async () => {
-    process.env.SUPERADMIN_ROOT_EMAIL = 'root@example.com';
+  it("rejects superadmin invitations from a non-root superadmin", async () => {
+    process.env.SUPERADMIN_ROOT_EMAIL = "root@example.com";
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('superadmin', 'merchant_admin');
+    mockUserAccessContext("superadmin", "merchant_admin");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'superadmin',
-        'other-superadmin@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "superadmin",
+        "other-superadmin@example.com",
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul le compte superadmin racine peut inviter un superadmin',
+        "Seul le compte superadmin racine peut inviter un superadmin",
       ),
     );
   });
 
-  it('rejects superadmin invitations when the root email is not configured', async () => {
+  it("rejects superadmin invitations when the root email is not configured", async () => {
     delete process.env.SUPERADMIN_ROOT_EMAIL;
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('superadmin', 'merchant_admin');
+    mockUserAccessContext("superadmin", "merchant_admin");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'superadmin',
-        'root@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "superadmin",
+        "root@example.com",
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul le compte superadmin racine peut inviter un superadmin',
+        "Seul le compte superadmin racine peut inviter un superadmin",
       ),
     );
   });
 
-  it('rejects merchant roles when inviting in a cabinet', async () => {
+  it("rejects merchant roles when inviting in a cabinet", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('accountant', 'accountant');
+    mockUserAccessContext("accountant", "accountant");
 
     await expect(
       service.inviteMember(
-        'user-1',
-        'company-1',
-        'member@example.com',
-        'merchant_consultant',
-        'accountant@example.com',
+        "user-1",
+        "company-1",
+        "member@example.com",
+        "merchant_consultant",
+        "accountant@example.com",
       ),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Un cabinet ne peut inviter que des experts-comptables ou des collaborateurs comptables',
+        "Un cabinet ne peut inviter que des experts-comptables ou des collaborateurs comptables",
       ),
     );
   });
 
-  it('allows merchant_admin to remove a member', async () => {
+  it("allows merchant_admin to remove a member", async () => {
     const deleteChain = createDeleteSuccessChain();
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({
@@ -527,18 +655,18 @@ describe('CompanyService member management permissions', () => {
         delete: jest.fn().mockReturnValue(deleteChain),
       })),
     } as any);
-    mockUserAccessContext('merchant_admin', 'merchant_admin');
+    mockUserAccessContext("merchant_admin", "merchant_admin");
 
     await expect(
-      service.removeMember('admin-1', 'company-1', 'member-1'),
-    ).resolves.toEqual({ message: 'Membre retiré avec succès' });
+      service.removeMember("admin-1", "company-1", "member-1"),
+    ).resolves.toEqual({ message: "Membre retiré avec succès" });
 
     expect(subscriptionService.syncMemberQuantity).toHaveBeenCalledWith(
-      'company-1',
+      "company-1",
     );
   });
 
-  it('allows accountant to remove a cabinet member without syncing billing', async () => {
+  it("allows accountant to remove a cabinet member without syncing billing", async () => {
     const deleteChain = createDeleteSuccessChain();
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({
@@ -546,71 +674,96 @@ describe('CompanyService member management permissions', () => {
         delete: jest.fn().mockReturnValue(deleteChain),
       })),
     } as any);
-    mockUserAccessContext('accountant', 'accountant');
+    mockUserAccessContext("accountant", "accountant");
 
     await expect(
-      service.removeMember('user-1', 'company-1', 'member-1'),
-    ).resolves.toEqual({ message: 'Membre retiré avec succès' });
+      service.removeMember("user-1", "company-1", "member-1"),
+    ).resolves.toEqual({ message: "Membre retiré avec succès" });
 
     expect(subscriptionService.syncMemberQuantity).not.toHaveBeenCalled();
   });
 
-  it('rejects member removal for accountant_consultant in a cabinet', async () => {
+  it("rejects member removal for accountant_consultant in a cabinet", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('accountant_consultant', 'accountant');
+    mockUserAccessContext("accountant_consultant", "accountant");
 
     await expect(
-      service.removeMember('user-1', 'company-1', 'member-1'),
+      service.removeMember("user-1", "company-1", "member-1"),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet',
+        "Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet",
       ),
     );
   });
 
-  it('allows merchant_admin to cancel an invitation', async () => {
-    jest.mocked(getSupabaseAdmin).mockReturnValue(
-      createCancelInvitationSupabaseMock(),
-    );
-    mockUserAccessContext('merchant_admin', 'merchant_admin');
+  it("allows merchant_admin to cancel an invitation", async () => {
+    jest
+      .mocked(getSupabaseAdmin)
+      .mockReturnValue(createCancelInvitationSupabaseMock());
+    mockUserAccessContext("merchant_admin", "merchant_admin");
 
     await expect(
-      service.cancelInvitation('admin-1', 'company-1', 'invite-1'),
-    ).resolves.toEqual({ message: 'Invitation annulée' });
+      service.cancelInvitation("admin-1", "company-1", "invite-1"),
+    ).resolves.toEqual({ message: "Invitation annulée" });
 
     expect(subscriptionService.syncMemberQuantity).toHaveBeenCalledWith(
-      'company-1',
+      "company-1",
     );
   });
 
-  it('allows accountant to cancel a cabinet invitation', async () => {
-    jest.mocked(getSupabaseAdmin).mockReturnValue(
-      createCancelInvitationSupabaseMock('accountant_consultant'),
-    );
-    mockUserAccessContext('accountant', 'accountant');
+  it("allows accountant to cancel a cabinet invitation", async () => {
+    jest
+      .mocked(getSupabaseAdmin)
+      .mockReturnValue(
+        createCancelInvitationSupabaseMock("accountant_consultant"),
+      );
+    mockUserAccessContext("accountant", "accountant");
 
     await expect(
-      service.cancelInvitation('user-1', 'company-1', 'invite-1'),
-    ).resolves.toEqual({ message: 'Invitation annulée' });
+      service.cancelInvitation("user-1", "company-1", "invite-1"),
+    ).resolves.toEqual({ message: "Invitation annulée" });
   });
 
-  it('rejects invitation cancellation for accountant_consultant in a cabinet', async () => {
+  it("allows accountant to cancel a linked client merchant_admin invitation", async () => {
+    jest
+      .mocked(getSupabaseAdmin)
+      .mockReturnValue(createCancelInvitationSupabaseMock("merchant_admin"));
+    mockUserRole("accountant");
+    jest
+      .spyOn(service as any, "assertLinkedClientForAccountant")
+      .mockResolvedValue(undefined);
+
+    await expect(
+      service.cancelLinkedClientMerchantAdminInvitation(
+        "user-1",
+        "cabinet-1",
+        "client-1",
+        "invite-1",
+      ),
+    ).resolves.toEqual({ message: "Invitation annulée" });
+
+    expect(subscriptionService.syncMemberQuantity).toHaveBeenCalledWith(
+      "client-1",
+    );
+  });
+
+  it("rejects invitation cancellation for accountant_consultant in a cabinet", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
-    mockUserAccessContext('accountant_consultant', 'accountant');
+    mockUserAccessContext("accountant_consultant", "accountant");
 
     await expect(
-      service.cancelInvitation('user-1', 'company-1', 'invite-1'),
+      service.cancelInvitation("user-1", "company-1", "invite-1"),
     ).rejects.toThrow(
       new ForbiddenException(
-        'Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet',
+        "Seul l’expert-comptable administrateur peut gérer les membres de ce cabinet",
       ),
     );
   });
 
-  it('includes invited firm data when validating an accountant firm invitation', async () => {
+  it("includes invited firm data when validating an accountant firm invitation", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({
       from: jest.fn((table: string) => {
-        if (table === 'company_invitations') {
+        if (table === "company_invitations") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
@@ -618,15 +771,15 @@ describe('CompanyService member management permissions', () => {
                   gt: jest.fn().mockReturnValue({
                     maybeSingle: jest.fn().mockResolvedValue({
                       data: {
-                        company_id: 'merchant-1',
-                        email: 'cabinet@example.com',
-                        role: 'accountant',
-                        invitation_type: 'accountant_firm',
-                        expires_at: '2026-04-15T10:00:00.000Z',
-                        invited_by: 'user-1',
-                        invited_firm_name: 'Cabinet Test',
-                        invited_firm_siren: '123456789',
-                        company: { name: 'Entreprise Test' },
+                        company_id: "merchant-1",
+                        email: "cabinet@example.com",
+                        role: "accountant",
+                        invitation_type: "accountant_firm",
+                        expires_at: "2026-04-15T10:00:00.000Z",
+                        invited_by: "user-1",
+                        invited_firm_name: "Cabinet Test",
+                        invited_firm_siren: "123456789",
+                        company: { name: "Entreprise Test" },
                       },
                       error: null,
                     }),
@@ -637,12 +790,12 @@ describe('CompanyService member management permissions', () => {
           };
         }
 
-        if (table === 'profiles') {
+        if (table === "profiles") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
                 maybeSingle: jest.fn().mockResolvedValue({
-                  data: { first_name: 'Jane', last_name: 'Doe' },
+                  data: { first_name: "Jane", last_name: "Doe" },
                 }),
               }),
             })),
@@ -653,49 +806,51 @@ describe('CompanyService member management permissions', () => {
       }),
     } as any);
 
-    await expect(service.validateInviteToken('token-1')).resolves.toMatchObject({
-      company_id: 'merchant-1',
-      email: 'cabinet@example.com',
-      role: 'accountant',
-      invitation_type: 'accountant_firm',
-      company_name: 'Entreprise Test',
-      inviter_name: 'Jane Doe',
-      invited_firm_name: 'Cabinet Test',
-      invited_firm_siren: '123456789',
-    });
+    await expect(service.validateInviteToken("token-1")).resolves.toMatchObject(
+      {
+        company_id: "merchant-1",
+        email: "cabinet@example.com",
+        role: "accountant",
+        invitation_type: "accountant_firm",
+        company_name: "Entreprise Test",
+        inviter_name: "Jane Doe",
+        invited_firm_name: "Cabinet Test",
+        invited_firm_siren: "123456789",
+      },
+    );
   });
 
-  it('maps accountant document storage availability on linked client documents', async () => {
+  it("maps accountant document storage availability on linked client documents", async () => {
     const invoices = [
       {
-        id: 'invoice-1',
-        invoice_number: 'F-2026-001',
+        id: "invoice-1",
+        invoice_number: "F-2026-001",
         total: 1200,
-        status: 'paid',
-        issue_date: '2026-02-10',
-        created_at: '2026-02-10T10:00:00.000Z',
-        type: 'standard',
+        status: "paid",
+        issue_date: "2026-02-10",
+        created_at: "2026-02-10T10:00:00.000Z",
+        type: "standard",
       },
       {
-        id: 'invoice-2',
-        invoice_number: 'F-2026-002',
+        id: "invoice-2",
+        invoice_number: "F-2026-002",
         total: 850,
-        status: 'sent',
-        issue_date: '2026-02-20',
-        created_at: '2026-02-20T10:00:00.000Z',
-        type: 'standard',
+        status: "sent",
+        issue_date: "2026-02-20",
+        created_at: "2026-02-20T10:00:00.000Z",
+        type: "standard",
       },
     ];
 
     jest.mocked(getSupabaseAdmin).mockReturnValue({
       from: jest.fn((table: string) => {
-        if (table === 'companies') {
+        if (table === "companies") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
                 eq: jest.fn().mockReturnValue({
                   single: jest.fn().mockResolvedValue({
-                    data: { id: 'client-1' },
+                    data: { id: "client-1" },
                     error: null,
                   }),
                 }),
@@ -704,7 +859,7 @@ describe('CompanyService member management permissions', () => {
           };
         }
 
-        if (table === 'invoices') {
+        if (table === "invoices") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
@@ -725,7 +880,7 @@ describe('CompanyService member management permissions', () => {
           };
         }
 
-        if (table === 'documents') {
+        if (table === "documents") {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
@@ -735,12 +890,13 @@ describe('CompanyService member management permissions', () => {
                       order: jest.fn().mockResolvedValue({
                         data: [
                           {
-                            id: 'stored-1',
-                            related_id: 'invoice-1',
-                            filename: 'facture-F-2026-001.pdf',
-                            storage_path: 'client-1/invoices/invoice-1/facture-F-2026-001.pdf',
-                            mime_type: 'application/pdf',
-                            created_at: '2026-02-10T11:00:00.000Z',
+                            id: "stored-1",
+                            related_id: "invoice-1",
+                            filename: "facture-F-2026-001.pdf",
+                            storage_path:
+                              "client-1/invoices/invoice-1/facture-F-2026-001.pdf",
+                            mime_type: "application/pdf",
+                            created_at: "2026-02-10T11:00:00.000Z",
                           },
                         ],
                         error: null,
@@ -756,32 +912,32 @@ describe('CompanyService member management permissions', () => {
         throw new Error(`Unexpected table: ${table}`);
       }),
     } as any);
-    mockUserRole('accountant');
+    mockUserRole("accountant");
 
     const result = await service.getLinkedClientDocuments(
-      'user-1',
-      'cabinet-1',
-      'client-1',
-      { type: 'invoices', year: 2026, period: 'q1', page: 1, limit: 20 },
+      "user-1",
+      "cabinet-1",
+      "client-1",
+      { type: "invoices", year: 2026, period: "q1", page: 1, limit: 20 },
     );
 
     expect(result.total).toBe(2);
     expect(result.data).toEqual([
       expect.objectContaining({
-        id: 'invoice-1',
-        document_kind: 'invoice',
+        id: "invoice-1",
+        document_kind: "invoice",
         is_immutable: true,
         storage_available: true,
-        stored_document_id: 'stored-1',
-        downloadable_filename: 'facture-F-2026-001.pdf',
+        stored_document_id: "stored-1",
+        downloadable_filename: "facture-F-2026-001.pdf",
       }),
       expect.objectContaining({
-        id: 'invoice-2',
-        document_kind: 'invoice',
+        id: "invoice-2",
+        document_kind: "invoice",
         is_immutable: true,
         storage_available: false,
         stored_document_id: null,
-        downloadable_filename: 'facture-F-2026-002.pdf',
+        downloadable_filename: "facture-F-2026-002.pdf",
       }),
     ]);
   });
