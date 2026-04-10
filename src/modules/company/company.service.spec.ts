@@ -281,6 +281,29 @@ describe('CompanyService member management permissions', () => {
     },
   );
 
+  it('does not roll back a pending merchant invitation when SEPA member sync succeeds', async () => {
+    const inviteMock = createInviteSupabaseMock();
+    const rollbackSpy = jest
+      .spyOn(service as any, 'rollbackPendingMemberInvitation')
+      .mockResolvedValue(undefined);
+
+    subscriptionService.syncMemberQuantity.mockResolvedValue(undefined);
+
+    jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
+    mockUserAccessContext('merchant_admin', 'merchant_admin');
+
+    const result = await service.inviteMember(
+      'user-1',
+      'company-1',
+      'member@example.com',
+      'merchant_consultant',
+      'admin@example.com',
+    );
+
+    expect(result.status).toBe('pending');
+    expect(rollbackSpy).not.toHaveBeenCalled();
+  });
+
   it.each([
     'accountant',
     'accountant_consultant',
@@ -327,7 +350,9 @@ describe('CompanyService member management permissions', () => {
         'merchant_consultant',
         'admin@example.com',
       ),
-    ).rejects.toThrow('Stripe sync failed');
+    ).rejects.toThrow(
+      "L'ajout du membre n'a pas pu être finalisé car la mise à jour de la facturation a échoué.",
+    );
 
     expect(rollbackSpy).toHaveBeenCalledWith(inviteMock.supabase, 'invite-1');
     expect(notificationService.sendInviteEmail).not.toHaveBeenCalled();

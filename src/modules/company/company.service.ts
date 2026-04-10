@@ -2691,12 +2691,52 @@ export class CompanyService {
         await this.rollbackPendingMemberInvitation(supabase, invitationId);
     }
 
-    private getMemberBillingSyncErrorMessage(error: unknown): string {
+    private extractErrorMessage(error: unknown): string | null {
+        if (error instanceof BadRequestException) {
+            const response = error.getResponse();
+            if (typeof response === 'string') {
+                return response;
+            }
+
+            if (
+                response
+                && typeof response === 'object'
+                && 'message' in response
+            ) {
+                const message = (response as { message?: string | string[] }).message;
+                return Array.isArray(message) ? message.join(', ') : message || null;
+            }
+        }
+
         if (error instanceof Error && error.message) {
             return error.message;
         }
 
-        return "L'ajout du membre n'a pas pu être finalisé car la mise à jour de la facturation a échoué.";
+        return null;
+    }
+
+    private getMemberBillingSyncErrorMessage(error: unknown): string {
+        const rawMessage = this.extractErrorMessage(error);
+        if (!rawMessage) {
+            return "L'ajout du membre n'a pas pu être finalisé car la mise à jour de la facturation a échoué.";
+        }
+
+        if (
+            rawMessage.includes('payment_behavior')
+            || rawMessage.includes('pending_if_incomplete')
+            || rawMessage.includes('sepa_debit')
+        ) {
+            return "L'ajout du membre n'a pas pu être finalisé car le moyen de paiement actuel de l'abonnement ne permet pas de facturer immédiatement ce supplément.";
+        }
+
+        if (
+            rawMessage.toLowerCase().includes('stripe')
+            || rawMessage.toLowerCase().includes('payment')
+        ) {
+            return "L'ajout du membre n'a pas pu être finalisé car la mise à jour de la facturation a échoué.";
+        }
+
+        return rawMessage;
     }
 
     private shouldSyncMemberQuantity(

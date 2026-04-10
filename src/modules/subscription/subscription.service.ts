@@ -194,6 +194,85 @@ export class SubscriptionService {
             : null;
     }
 
+    private async getPaymentMethodType(
+        stripe: Stripe,
+        paymentMethod: string | Stripe.PaymentMethod | null | undefined,
+    ): Promise<string | null> {
+        if (!paymentMethod) {
+            return null;
+        }
+
+        if (typeof paymentMethod !== 'string') {
+            return paymentMethod.type || null;
+        }
+
+        const stripePaymentMethod = await stripe.paymentMethods.retrieve(paymentMethod);
+        return stripePaymentMethod.type || null;
+    }
+
+    private async getDefaultSubscriptionPaymentMethodType(
+        stripe: Stripe,
+        stripeSubscriptionId: string,
+    ): Promise<string | null> {
+        const stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+
+        const subscriptionPaymentMethodType = await this.getPaymentMethodType(
+            stripe,
+            stripeSubscription.default_payment_method as string | Stripe.PaymentMethod | null | undefined,
+        );
+
+        if (subscriptionPaymentMethodType) {
+            return subscriptionPaymentMethodType;
+        }
+
+        const customerId = typeof stripeSubscription.customer === 'string'
+            ? stripeSubscription.customer
+            : stripeSubscription.customer?.id;
+
+        if (!customerId) {
+            return null;
+        }
+
+        const stripeCustomer = await stripe.customers.retrieve(customerId);
+        if ('deleted' in stripeCustomer && stripeCustomer.deleted) {
+            return null;
+        }
+
+        return this.getPaymentMethodType(
+            stripe,
+            stripeCustomer.invoice_settings?.default_payment_method as
+                | string
+                | Stripe.PaymentMethod
+                | null
+                | undefined,
+        );
+    }
+
+    private getMemberItemBillingParams(
+        paymentMethodType: string | null,
+        isIncreasingQuantity: boolean,
+    ): {
+        proration_behavior: 'always_invoice' | 'create_prorations';
+        payment_behavior?: 'pending_if_incomplete';
+    } {
+        if (!isIncreasingQuantity) {
+            return {
+                proration_behavior: 'create_prorations',
+            };
+        }
+
+        if (paymentMethodType === 'sepa_debit') {
+            return {
+                proration_behavior: 'create_prorations',
+            };
+        }
+
+        return {
+            proration_behavior: 'always_invoice',
+            payment_behavior: 'pending_if_incomplete',
+        };
+    }
+
     private async ensureRegistrationEmailAvailable(
         supabase: any,
         email: string,
@@ -1522,6 +1601,10 @@ export class SubscriptionService {
 
         // Count extra members
         const extraMembers = await this.countExtraMembers(supabase, company.owner_id);
+        const defaultPaymentMethodType = await this.getDefaultSubscriptionPaymentMethodType(
+            stripe,
+            subscription.stripe_subscription_id,
+        );
 
         let nextMemberItemId = subscription.stripe_member_item_id || null;
 
@@ -1538,15 +1621,14 @@ export class SubscriptionService {
             }
         } else if (subscription.stripe_member_item_id) {
             const isIncreasingQuantity = extraMembers > (subscription.extra_members_quantity || 0);
+            const billingParams = this.getMemberItemBillingParams(
+                defaultPaymentMethodType,
+                isIncreasingQuantity,
+            );
 
             await stripe.subscriptionItems.update(subscription.stripe_member_item_id, {
                 quantity: extraMembers,
-                proration_behavior: isIncreasingQuantity
-                    ? 'always_invoice'
-                    : 'create_prorations',
-                ...(isIncreasingQuantity
-                    ? { payment_behavior: 'pending_if_incomplete' as const }
-                    : {}),
+                ...billingParams,
             });
         } else {
             if (!subscription.plan_id) {
@@ -1564,12 +1646,15 @@ export class SubscriptionService {
             }
 
             const memberPriceId = await this.resolveStripePriceId(stripe, plan.stripe_member_lookup_key);
+            const billingParams = this.getMemberItemBillingParams(
+                defaultPaymentMethodType,
+                true,
+            );
             const createdItem = await stripe.subscriptionItems.create({
                 subscription: subscription.stripe_subscription_id,
                 price: memberPriceId,
                 quantity: extraMembers,
-                proration_behavior: 'always_invoice',
-                payment_behavior: 'pending_if_incomplete',
+                ...billingParams,
             });
             nextMemberItemId = createdItem.id;
         }
