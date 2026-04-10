@@ -17,6 +17,7 @@ import {
   CompanyWithRoleResponseDto,
   CompanyListResponseDto,
   CompanyQueryDto,
+  InviteNewMerchantAdminDto,
   InviteAccountantFirmDto,
   AccountantDocumentsQueryDto,
   BulkDownloadLinkedClientDocumentsDto,
@@ -130,6 +131,7 @@ interface AccountantLinkRequestEntity {
   id: string;
   accountant_company_id: string;
   merchant_company_id: string;
+  request_origin: "existing_merchant" | "new_client_invitation";
   requested_by: string;
   status: AccountantLinkRequestStatus;
   created_at: string;
@@ -1497,6 +1499,81 @@ export class CompanyService {
     await supabase.from("units").insert(defaultUnits);
   }
 
+  private async createPendingMerchantCompanyForCabinetInvite(
+    userId: string,
+    data: {
+      name: string;
+      legal_name?: string;
+      siren: string;
+      address?: string;
+      postal_code?: string;
+      city?: string;
+      country: string;
+    },
+  ): Promise<{ id: string }> {
+    const supabase = getSupabaseAdmin();
+
+    const { data: company, error } = await supabase
+      .from("companies")
+      .insert({
+        name: data.name,
+        legal_name: data.legal_name || null,
+        siren: data.siren,
+        address: data.address || null,
+        postal_code: data.postal_code || null,
+        city: data.city || null,
+        country: data.country,
+        owner_id: userId,
+        accountant_company_id: null,
+        default_vat_rate: 20.0,
+        default_payment_terms: 30,
+        quote_validity_days: 30,
+      })
+      .select("id")
+      .single();
+
+    if (error || !company) {
+      throw new BadRequestException(
+        `Erreur lors de la création de l'entreprise invitée: ${error?.message || "inconnue"}`,
+      );
+    }
+
+    await this.createDefaultUnits(company.id);
+
+    return { id: company.id };
+  }
+
+  private async createAccountantLinkRequestRecord(
+    userId: string,
+    accountantCompanyId: string,
+    merchantCompanyId: string,
+    requestOrigin: "existing_merchant" | "new_client_invitation",
+  ): Promise<AccountantLinkRequestEntity> {
+    const supabase = getSupabaseAdmin();
+
+    const { data: request, error } = await supabase
+      .from("accountant_link_requests")
+      .insert({
+        accountant_company_id: accountantCompanyId,
+        merchant_company_id: merchantCompanyId,
+        request_origin: requestOrigin,
+        requested_by: userId,
+        status: "pending",
+      })
+      .select(
+        "id, accountant_company_id, merchant_company_id, request_origin, requested_by, status, created_at, responded_at, responded_by",
+      )
+      .single();
+
+    if (error || !request) {
+      throw new BadRequestException(
+        `Erreur lors de la création de la demande de liaison: ${error?.message || "inconnue"}`,
+      );
+    }
+
+    return request as AccountantLinkRequestEntity;
+  }
+
   // ============================================
   // Accountant linking
   // ============================================
@@ -1714,6 +1791,115 @@ export class CompanyService {
     };
   }
 
+  async inviteNewMerchantAdmin(
+    userId: string,
+    accountantCompanyId: string,
+    dto: InviteNewMerchantAdminDto,
+  ): Promise<
+    | {
+        status: "existing_merchant";
+        merchant_company: { id: string; name: string; siren: string | null };
+      }
+    | {
+        status: "invited";
+        client_company_id: string;
+        invitation_id: string;
+        email: string;
+      }
+  > {
+    const userRole = await this.checkUserAccess(userId, accountantCompanyId);
+    if (userRole !== "accountant") {
+      throw new ForbiddenException(
+        "Seul un expert-comptable administrateur peut inviter un nouveau commerçant depuis ce cabinet",
+      );
+    }
+
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const companyName = dto.company_name.trim();
+    if (!companyName) {
+      throw new BadRequestException("Le nom de l'entreprise est requis");
+    }
+
+    let normalizedIdentifiers: ReturnType<typeof normalizeBusinessIdentifiers>;
+    try {
+      normalizedIdentifiers = normalizeBusinessIdentifiers({
+        siren: dto.siren,
+        siret: dto.siret,
+        country: dto.country,
+      });
+    } catch (error: any) {
+      throw new BadRequestException(
+        error?.message ||
+          "Les identifiants SIREN/SIRET fournis sont invalides",
+      );
+    }
+
+    if (!normalizedIdentifiers.siren) {
+      throw new BadRequestException("Le SIREN est requis");
+    }
+
+    const existingMerchant = await this.findExistingMerchantCompanyForInvite(
+      accountantCompanyId,
+      normalizedIdentifiers.siren,
+    );
+    if (existingMerchant) {
+      return {
+        status: "existing_merchant",
+        merchant_company: existingMerchant,
+      };
+    }
+
+    const createdCompany = await this.createPendingMerchantCompanyForCabinetInvite(
+      userId,
+      {
+        name: companyName,
+        legal_name: companyName,
+        siren: normalizedIdentifiers.siren,
+        address: dto.address?.trim() || undefined,
+        postal_code: dto.postal_code?.trim() || undefined,
+        city: dto.city?.trim() || undefined,
+        country: normalizedIdentifiers.country,
+      },
+    );
+
+    let invitation;
+    try {
+      await this.createAccountantLinkRequestRecord(
+        userId,
+        accountantCompanyId,
+        createdCompany.id,
+        "new_client_invitation",
+      );
+
+      invitation = await this.createCompanyInvitation(
+        userId,
+        createdCompany.id,
+        normalizedEmail,
+        "merchant_admin",
+        "merchant_admin",
+      );
+    } catch (error) {
+      const supabase = getSupabaseAdmin();
+      await supabase.from("companies").delete().eq("id", createdCompany.id);
+      throw error;
+    }
+
+    if (invitation.status === "accepted") {
+      await this.acceptNewClientInvitationLinkRequest(
+        createdCompany.id,
+        userId,
+        userId,
+      );
+    }
+
+    return {
+      status: "invited",
+      client_company_id: createdCompany.id,
+      invitation_id: invitation.id,
+      email: normalizedEmail,
+    };
+  }
+
   async getLinkedClients(userId: string, companyId: string): Promise<any[]> {
     const supabase = getSupabaseAdmin();
 
@@ -1926,7 +2112,7 @@ export class CompanyService {
     const { data, error } = await supabase
       .from("accountant_link_requests")
       .select(
-        "id, accountant_company_id, merchant_company_id, requested_by, status, created_at, responded_at, responded_by",
+        "id, accountant_company_id, merchant_company_id, request_origin, requested_by, status, created_at, responded_at, responded_by",
       )
       .eq(column, companyId)
       .eq("status", "pending")
@@ -2099,27 +2285,15 @@ export class CompanyService {
       );
     }
 
-    const { data: request, error } = await supabase
-      .from("accountant_link_requests")
-      .insert({
-        accountant_company_id: accountantCompanyId,
-        merchant_company_id: merchantCompanyId,
-        requested_by: userId,
-        status: "pending",
-      })
-      .select(
-        "id, accountant_company_id, merchant_company_id, requested_by, status, created_at, responded_at, responded_by",
-      )
-      .single();
-
-    if (error || !request) {
-      throw new BadRequestException(
-        `Erreur lors de la création de la demande de liaison: ${error?.message || "inconnue"}`,
-      );
-    }
+    const request = await this.createAccountantLinkRequestRecord(
+      userId,
+      accountantCompanyId,
+      merchantCompanyId,
+      "existing_merchant",
+    );
 
     const [hydratedRequest] = await this.hydrateAccountantLinkRequests([
-      request as AccountantLinkRequestEntity,
+      request,
     ]);
     return hydratedRequest;
   }
@@ -2768,7 +2942,7 @@ export class CompanyService {
     const { data: request, error: requestError } = await supabase
       .from("accountant_link_requests")
       .select(
-        "id, accountant_company_id, merchant_company_id, requested_by, status, created_at, responded_at, responded_by",
+        "id, accountant_company_id, merchant_company_id, request_origin, requested_by, status, created_at, responded_at, responded_by",
       )
       .eq("id", requestId)
       .eq("merchant_company_id", merchantCompanyId)
@@ -2823,7 +2997,7 @@ export class CompanyService {
       })
       .eq("id", requestId)
       .select(
-        "id, accountant_company_id, merchant_company_id, requested_by, status, created_at, responded_at, responded_by",
+        "id, accountant_company_id, merchant_company_id, request_origin, requested_by, status, created_at, responded_at, responded_by",
       )
       .single();
 
@@ -2850,6 +3024,87 @@ export class CompanyService {
       updatedRequest as AccountantLinkRequestEntity,
     ]);
     return hydratedRequest;
+  }
+
+  async acceptNewClientInvitationLinkRequest(
+    merchantCompanyId: string,
+    requestedBy: string,
+    respondedBy: string,
+  ): Promise<void> {
+    const supabase = getSupabaseAdmin();
+
+    const { data: request, error: requestError } = await supabase
+      .from("accountant_link_requests")
+      .select(
+        "id, accountant_company_id, merchant_company_id, request_origin, requested_by, status, created_at, responded_at, responded_by",
+      )
+      .eq("merchant_company_id", merchantCompanyId)
+      .eq("requested_by", requestedBy)
+      .eq("request_origin", "new_client_invitation")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (requestError) {
+      throw new BadRequestException(
+        `Erreur lors du chargement de la demande de liaison invitée: ${requestError.message}`,
+      );
+    }
+
+    if (!request) {
+      return;
+    }
+
+    const { data: merchantCompany, error: merchantError } = await supabase
+      .from("companies")
+      .select("accountant_company_id")
+      .eq("id", merchantCompanyId)
+      .single();
+
+    if (merchantError || !merchantCompany) {
+      throw new NotFoundException("Entreprise commerçante introuvable");
+    }
+
+    if (!merchantCompany.accountant_company_id) {
+      const { error: linkError } = await supabase
+        .from("companies")
+        .update({ accountant_company_id: request.accountant_company_id })
+        .eq("id", merchantCompanyId);
+
+      if (linkError) {
+        throw new BadRequestException(
+          `Erreur lors du rattachement du dossier client: ${linkError.message}`,
+        );
+      }
+    }
+
+    const respondedAt = new Date().toISOString();
+    const { error: updateError } = await supabase
+      .from("accountant_link_requests")
+      .update({
+        status: "accepted",
+        responded_at: respondedAt,
+        responded_by: respondedBy,
+      })
+      .eq("id", request.id);
+
+    if (updateError) {
+      throw new BadRequestException(
+        `Erreur lors de l’acceptation de la demande de liaison invitée: ${updateError.message}`,
+      );
+    }
+
+    await supabase
+      .from("accountant_link_requests")
+      .update({
+        status: "cancelled",
+        responded_at: respondedAt,
+        responded_by: respondedBy,
+      })
+      .eq("merchant_company_id", merchantCompanyId)
+      .eq("status", "pending")
+      .neq("id", request.id);
   }
 
   private async findExistingAccountantCompany(
@@ -2899,6 +3154,95 @@ export class CompanyService {
       id: byEmail.id,
       name: byEmail.name,
       siren: byEmail.siren || null,
+    };
+  }
+
+  private async findExistingMerchantCompanyForInvite(
+    accountantCompanyId: string,
+    siren: string,
+  ): Promise<{ id: string; name: string; siren: string | null } | null> {
+    const supabase = getSupabaseAdmin();
+
+    const { data: existingCompany, error: companyError } = await supabase
+      .from("companies")
+      .select("id, name, siren, accountant_company_id")
+      .eq("siren", siren)
+      .limit(1)
+      .maybeSingle();
+
+    if (companyError) {
+      throw new BadRequestException(
+        `Erreur lors de la recherche du commerçant: ${companyError.message}`,
+      );
+    }
+
+    if (!existingCompany) {
+      return null;
+    }
+
+    if (existingCompany.id === accountantCompanyId) {
+      throw new ConflictException(
+        "Le SIREN sélectionné correspond à votre propre cabinet",
+      );
+    }
+
+    const { data: merchantCompanyIds, error: merchantIdsError } = await supabase
+      .from("user_companies")
+      .select("company_id")
+      .eq("role", "merchant_admin");
+
+    if (merchantIdsError) {
+      throw new BadRequestException(
+        `Erreur lors de la recherche des commerçants: ${merchantIdsError.message}`,
+      );
+    }
+
+    const merchantIds = new Set(
+      (merchantCompanyIds || []).map((relation: any) => relation.company_id),
+    );
+
+    if (!merchantIds.has(existingCompany.id)) {
+      throw new ConflictException(
+        "Une entreprise avec ce SIREN existe déjà sur la plateforme mais n’est pas éligible comme commerçant",
+      );
+    }
+
+    if (existingCompany.accountant_company_id) {
+      if (existingCompany.accountant_company_id === accountantCompanyId) {
+        throw new ConflictException(
+          "Cette entreprise est déjà liée à votre cabinet",
+        );
+      }
+
+      throw new ConflictException(
+        "Cette entreprise est déjà liée à un autre cabinet",
+      );
+    }
+
+    const { data: pendingRequest, error: pendingRequestError } = await supabase
+      .from("accountant_link_requests")
+      .select("id")
+      .eq("accountant_company_id", accountantCompanyId)
+      .eq("merchant_company_id", existingCompany.id)
+      .eq("status", "pending")
+      .maybeSingle();
+
+    if (pendingRequestError) {
+      throw new BadRequestException(
+        `Erreur lors de la vérification des demandes de liaison: ${pendingRequestError.message}`,
+      );
+    }
+
+    if (pendingRequest) {
+      throw new ConflictException(
+        "Une demande de liaison est déjà en attente pour cette entreprise",
+      );
+    }
+
+    return {
+      id: existingCompany.id,
+      name: existingCompany.name,
+      siren: existingCompany.siren || null,
     };
   }
 

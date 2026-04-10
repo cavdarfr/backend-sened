@@ -3,12 +3,16 @@ import { getSupabaseClient, getSupabaseAdmin, SupabaseUser } from '../../config/
 import { CompleteRegistrationDto } from './dto/complete-registration.dto';
 import { normalizeBusinessIdentifiers } from '../../shared/utils/business-identifiers.util';
 import { SubscriptionService } from '../subscription/subscription.service';
+import { CompanyService } from '../company/company.service';
 
 const REGISTRATION_SUPPORT_EMAIL = 'contact@sened.fr';
 
 @Injectable()
 export class AuthService {
-    constructor(private readonly subscriptionService: SubscriptionService) {}
+    constructor(
+        private readonly subscriptionService: SubscriptionService,
+        private readonly companyService: CompanyService,
+    ) {}
 
     async checkRegistrationAvailability(params: {
         siren?: string;
@@ -118,7 +122,7 @@ export class AuthService {
         // Vérifier si l'utilisateur a été invité et forcer le rôle de l'invitation
         const { data: invitation } = await supabase
             .from('company_invitations')
-            .select('role, company_id')
+            .select('role, company_id, invited_by')
             .eq('email', email.toLowerCase())
             .not('accepted_at', 'is', null)
             .order('accepted_at', { ascending: false })
@@ -247,6 +251,14 @@ export class AuthService {
                 }
             }
             // Si non trouvé, on ignore silencieusement
+        }
+
+        if (invitation?.company_id && invitation?.invited_by) {
+            await this.companyService.acceptNewClientInvitationLinkRequest(
+                invitation.company_id,
+                invitation.invited_by,
+                user.id,
+            );
         }
 
         // Sync Stripe member quantity for companies joined via invitation

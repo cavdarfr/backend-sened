@@ -193,6 +193,73 @@ function createCancelInvitationSupabaseMock(
   };
 }
 
+function createExistingMerchantSupabaseMock(options?: {
+  accountantCompanyId?: string | null;
+  merchantCompanyId?: string;
+  merchantCompanyName?: string;
+  hasMerchantAdmin?: boolean;
+  hasPendingRequest?: boolean;
+}) {
+  const merchantCompanyId = options?.merchantCompanyId || "merchant-1";
+
+  return {
+    from: jest.fn((table: string) => {
+      if (table === "companies") {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn().mockReturnValue({
+              limit: jest.fn().mockReturnValue({
+                maybeSingle: jest.fn().mockResolvedValue({
+                  data: {
+                    id: merchantCompanyId,
+                    name: options?.merchantCompanyName || "Marchand existant",
+                    siren: "123456789",
+                    accountant_company_id:
+                      options?.accountantCompanyId ?? null,
+                  },
+                  error: null,
+                }),
+              }),
+            }),
+          })),
+        };
+      }
+
+      if (table === "user_companies") {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn().mockResolvedValue({
+              data: options?.hasMerchantAdmin === false
+                ? []
+                : [{ company_id: merchantCompanyId }],
+              error: null,
+            }),
+          })),
+        };
+      }
+
+      if (table === "accountant_link_requests") {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn().mockReturnValue({
+              eq: jest.fn().mockReturnValue({
+                eq: jest.fn().mockReturnValue({
+                  maybeSingle: jest.fn().mockResolvedValue({
+                    data: options?.hasPendingRequest ? { id: "request-1" } : null,
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          })),
+        };
+      }
+
+      throw new Error(`Unexpected table: ${table}`);
+    }),
+  };
+}
+
 describe("CompanyService member management permissions", () => {
   let service: CompanyService;
   let notificationService: { sendInviteEmail: jest.Mock };
@@ -416,6 +483,131 @@ describe("CompanyService member management permissions", () => {
     );
   });
 
+  it("invites a new merchant admin by creating a provisional merchant company and a pending link request", async () => {
+    const inviteMock = createInviteSupabaseMock();
+
+    jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
+    mockUserRole("accountant");
+    jest
+      .spyOn(service as any, "findExistingMerchantCompanyForInvite")
+      .mockResolvedValue(null);
+    const createPendingCompanySpy = jest
+      .spyOn(service as any, "createPendingMerchantCompanyForCabinetInvite")
+      .mockResolvedValue({ id: "client-2" });
+    const createLinkRequestSpy = jest
+      .spyOn(service as any, "createAccountantLinkRequestRecord")
+      .mockResolvedValue({
+        id: "request-1",
+        accountant_company_id: "cabinet-1",
+        merchant_company_id: "client-2",
+        request_origin: "new_client_invitation",
+        requested_by: "user-1",
+        status: "pending",
+        created_at: "2026-04-10T09:00:00.000Z",
+        responded_at: null,
+        responded_by: null,
+      });
+
+    const result = await service.inviteNewMerchantAdmin("user-1", "cabinet-1", {
+      email: "merchant-admin@example.com",
+      company_name: "Nouveau Marchand",
+      siren: "123 456 789",
+      siret: "123 456 789 00012",
+      address: "1 rue Exemple",
+      postal_code: "75001",
+      city: "Paris",
+      country: "fr",
+    });
+
+    expect(result).toEqual({
+      status: "invited",
+      client_company_id: "client-2",
+      invitation_id: "invite-1",
+      email: "merchant-admin@example.com",
+    });
+    expect(createPendingCompanySpy).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({
+        name: "Nouveau Marchand",
+        legal_name: "Nouveau Marchand",
+        siren: "123456789",
+        address: "1 rue Exemple",
+        postal_code: "75001",
+        city: "Paris",
+        country: "FR",
+      }),
+    );
+    expect(createLinkRequestSpy).toHaveBeenCalledWith(
+      "user-1",
+      "cabinet-1",
+      "client-2",
+      "new_client_invitation",
+    );
+    expect(inviteMock.getInsertedPayload()).toMatchObject({
+      company_id: "client-2",
+      email: "merchant-admin@example.com",
+      role: "merchant_admin",
+      invited_by: "user-1",
+    });
+    expect(notificationService.sendInviteEmail).toHaveBeenCalledWith(
+      "merchant-admin@example.com",
+      "Jane Doe",
+      expect.objectContaining({
+        name: "Acme",
+      }),
+      "merchant_admin",
+      "token-1",
+    );
+  });
+
+  it("returns an existing merchant when the SIREN already matches an eligible platform merchant", async () => {
+    jest
+      .mocked(getSupabaseAdmin)
+      .mockReturnValue(createExistingMerchantSupabaseMock() as any);
+    mockUserRole("accountant");
+    const createPendingCompanySpy = jest.spyOn(
+      service as any,
+      "createPendingMerchantCompanyForCabinetInvite",
+    );
+    const inviteSpy = jest.spyOn(service as any, "createCompanyInvitation");
+
+    const result = await service.inviteNewMerchantAdmin("user-1", "cabinet-1", {
+      email: "merchant-admin@example.com",
+      company_name: "Marchand existant",
+      siren: "123456789",
+    });
+
+    expect(result).toEqual({
+      status: "existing_merchant",
+      merchant_company: {
+        id: "merchant-1",
+        name: "Marchand existant",
+        siren: "123456789",
+      },
+    });
+    expect(createPendingCompanySpy).not.toHaveBeenCalled();
+    expect(inviteSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a new merchant invite when the matching company is already linked to another cabinet", async () => {
+    jest
+      .mocked(getSupabaseAdmin)
+      .mockReturnValue(
+        createExistingMerchantSupabaseMock({
+          accountantCompanyId: "cabinet-2",
+        }) as any,
+      );
+    mockUserRole("accountant");
+
+    await expect(
+      service.inviteNewMerchantAdmin("user-1", "cabinet-1", {
+        email: "merchant-admin@example.com",
+        company_name: "Marchand existant",
+        siren: "123456789",
+      }),
+    ).rejects.toThrow("Cette entreprise est déjà liée à un autre cabinet");
+  });
+
   it("rejects linked client merchant admin invitations for accountant_consultant", async () => {
     jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
     mockUserRole("accountant_consultant");
@@ -451,6 +643,23 @@ describe("CompanyService member management permissions", () => {
         "merchant-admin@example.com",
       ),
     ).rejects.toThrow("Client non trouvé ou non lié à votre cabinet");
+  });
+
+  it("rejects new merchant invitations for accountant_consultant", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
+    mockUserRole("accountant_consultant");
+
+    await expect(
+      service.inviteNewMerchantAdmin("user-1", "cabinet-1", {
+        email: "merchant-admin@example.com",
+        company_name: "Nouveau Marchand",
+        siren: "123456789",
+      }),
+    ).rejects.toThrow(
+      new ForbiddenException(
+        "Seul un expert-comptable administrateur peut inviter un nouveau commerçant depuis ce cabinet",
+      ),
+    );
   });
 
   it("lists pending merchant_admin invitations for a linked client", async () => {

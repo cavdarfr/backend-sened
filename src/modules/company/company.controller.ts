@@ -32,6 +32,7 @@ import {
   AccountantLinkRequestResponseDto,
   InviteMemberDto,
   InviteLinkedClientMerchantAdminDto,
+  InviteNewMerchantAdminDto,
   InviteAccountantFirmDto,
   AccountantDocumentsQueryDto,
   BulkDownloadLinkedClientDocumentsDto,
@@ -335,6 +336,16 @@ export class CompanyController {
     @Param("id", ParseUUIDPipe) id: string,
   ) {
     return this.companyService.getLinkedClients(userId, id);
+  }
+
+  @Post(":id/invite-new-merchant-admin")
+  @HttpCode(HttpStatus.CREATED)
+  async inviteNewMerchantAdmin(
+    @CurrentUser("id") userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: InviteNewMerchantAdminDto,
+  ) {
+    return this.companyService.inviteNewMerchantAdmin(userId, id, dto);
   }
 
   @Get(":id/accountant-link-requests")

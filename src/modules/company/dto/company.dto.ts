@@ -301,6 +301,7 @@ export class AccountantLinkRequestResponseDto {
   id: string;
   accountant_company_id: string;
   merchant_company_id: string;
+  request_origin: "existing_merchant" | "new_client_invitation";
   requested_by: string;
   status: "pending" | "accepted" | "rejected" | "cancelled";
   created_at: string;
@@ -644,6 +645,61 @@ export class InviteLinkedClientMerchantAdminDto {
   )
   @IsEmail({}, { message: "Email invalide" })
   email: string;
+}
+
+export class InviteNewMerchantAdminDto {
+  @Transform(({ value }) =>
+    typeof value === "string" ? value.trim().toLowerCase() : value,
+  )
+  @IsEmail({}, { message: "Email invalide" })
+  email: string;
+
+  @IsString()
+  @MinLength(2, {
+    message: "Le nom de l'entreprise doit contenir au moins 2 caractères",
+  })
+  @MaxLength(255, {
+    message: "Le nom de l'entreprise ne peut pas dépasser 255 caractères",
+  })
+  company_name: string;
+
+  @Transform(({ value }) =>
+    typeof value === "string" ? value.replace(/\D/g, "") : value,
+  )
+  @Matches(/^[0-9]{9}$/, {
+    message: "Le SIREN doit contenir exactement 9 chiffres",
+  })
+  siren: string;
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === "string" ? value.replace(/\D/g, "") : value,
+  )
+  @Matches(/^[0-9]{14}$/, {
+    message: "Le SIRET doit contenir exactement 14 chiffres",
+  })
+  siret?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  address?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  postal_code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  @Transform(({ value }) => value?.toUpperCase())
+  country?: string;
 }
 
 /**
