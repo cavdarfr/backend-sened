@@ -51,6 +51,8 @@ export interface InvoiceData {
     rib_iban?: string;
     rib_bic?: string;
     rib_bank_name?: string;
+    is_vat_exempt?: boolean;
+    vat_exemption_note?: string;
   };
 
   // Client
@@ -293,6 +295,8 @@ export class PdfService implements OnModuleDestroy {
         rib_iban: invoice.company?.rib_iban,
         rib_bic: invoice.company?.rib_bic,
         rib_bank_name: invoice.company?.rib_bank_name,
+        is_vat_exempt: Boolean(invoice.company?.is_vat_exempt),
+        vat_exemption_note: invoice.company?.vat_exemption_note,
       },
       client: {
         company_name: invoice.client?.company_name,
@@ -529,6 +533,10 @@ export class PdfService implements OnModuleDestroy {
     };
 
     const vatGroups = this.groupByVatRate(data.items);
+    const isVatExempt = Boolean(data.company.is_vat_exempt);
+    const totalLabel = isVatExempt ? "Total HT" : "Total TTC";
+    const vatExemptionNote =
+      data.company.vat_exemption_note || "TVA non applicable, art. 293 B du CGI";
 
     return `
 <!DOCTYPE html>
@@ -929,7 +937,7 @@ export class PdfService implements OnModuleDestroy {
                 <td>Total HT</td>
                 <td class="text-right">${this.formatCurrency(data.subtotal)}</td>
             </tr>
-            ${vatGroups
+            ${isVatExempt ? "" : vatGroups
               .map(
                 (vg) => `
                 <tr>
@@ -939,6 +947,11 @@ export class PdfService implements OnModuleDestroy {
             `,
               )
               .join("")}
+            ${
+              isVatExempt
+                ? `<tr><td colspan="2">${vatExemptionNote}</td></tr>`
+                : ""
+            }
             ${
               data.discount_value && data.discount_value > 0
                 ? `
@@ -950,7 +963,7 @@ export class PdfService implements OnModuleDestroy {
                 : ""
             }
             <tr class="total-row">
-                <td>Total TTC</td>
+                <td>${totalLabel}</td>
                 <td class="text-right">${this.formatCurrency(data.total)}</td>
             </tr>
             ${
@@ -1046,6 +1059,10 @@ export class PdfService implements OnModuleDestroy {
       : "";
 
     const vatGroups = this.groupByVatRate(data.items);
+    const isVatExempt = Boolean(data.company.is_vat_exempt);
+    const totalLabel = isVatExempt ? "Total HT" : "Total TTC";
+    const vatExemptionNote =
+      data.company.vat_exemption_note || "TVA non applicable, art. 293 B du CGI";
 
     return `
 <!DOCTYPE html>
@@ -1420,7 +1437,7 @@ export class PdfService implements OnModuleDestroy {
                 <td>Total HT</td>
                 <td class="text-right">${this.formatCurrency(data.subtotal)}</td>
             </tr>
-            ${vatGroups
+            ${isVatExempt ? "" : vatGroups
               .map(
                 (vg) => `
                 <tr>
@@ -1430,6 +1447,11 @@ export class PdfService implements OnModuleDestroy {
             `,
               )
               .join("")}
+            ${
+              isVatExempt
+                ? `<tr><td colspan="2">${vatExemptionNote}</td></tr>`
+                : ""
+            }
             ${
               data.discount_value && data.discount_value > 0
                 ? `
@@ -1441,7 +1463,7 @@ export class PdfService implements OnModuleDestroy {
                 : ""
             }
             <tr class="total-row">
-                <td>Total TTC</td>
+                <td>${totalLabel}</td>
                 <td class="text-right">${this.formatCurrency(data.total)}</td>
             </tr>
         </table>

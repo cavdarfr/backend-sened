@@ -331,6 +331,12 @@ export class ChangeSubscriptionDto {
     billing_period?: 'monthly' | 'yearly';
 }
 
+export class ChangeSubscriptionResponseDto {
+    subscription: SubscriptionDto;
+    client_secret: string | null;
+    status: string;
+}
+
 /**
  * DTO réponse avec abonnement et plans disponibles
  */

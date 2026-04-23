@@ -167,6 +167,27 @@ export class InvoiceService {
     };
   }
 
+  private async normalizeItemsForCompanyVat(
+    companyId: string,
+    items: InvoiceItemDto[],
+  ): Promise<InvoiceItemDto[]> {
+    const supabase = getSupabaseAdmin();
+    const { data: company } = await supabase
+      .from("companies")
+      .select("is_vat_exempt")
+      .eq("id", companyId)
+      .maybeSingle();
+
+    if (!company?.is_vat_exempt) {
+      return items;
+    }
+
+    return items.map((item) => ({
+      ...item,
+      vat_rate: 0,
+    }));
+  }
+
   /**
    * Génère le numéro de facture
    */
@@ -355,8 +376,12 @@ export class InvoiceService {
     const paymentDelayDays = settings?.default_payment_delay_days || 30;
 
     // Calculer les totaux
+    const normalizedItems = await this.normalizeItemsForCompanyVat(
+      companyId,
+      dto.items,
+    );
     const { subtotal, total_vat, total, itemsWithTotals } =
-      this.calculateTotals(dto.items, dto.discount_type, dto.discount_value);
+      this.calculateTotals(normalizedItems, dto.discount_type, dto.discount_value);
 
     // Générer le numéro de facture
     const invoiceNumber = await this.generateInvoiceNumber(companyId);
@@ -564,7 +589,7 @@ export class InvoiceService {
         `
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name, is_vat_exempt, vat_exemption_note),
                 items:invoice_items(*),
                 payments:payments(*),
                 quote:quotes(id, quote_number, title)
@@ -630,7 +655,7 @@ export class InvoiceService {
                 *,
                 client:clients(id, company_name, first_name, last_name, email, phone, address, postal_code, city),
                 items:invoice_items(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name)
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name, is_vat_exempt, vat_exemption_note)
             `,
       )
       .eq("signature_token", token)
@@ -740,8 +765,12 @@ export class InvoiceService {
 
     // Recalculer les totaux si items modifiés
     if (dto.items) {
+      const normalizedItems = await this.normalizeItemsForCompanyVat(
+        companyId,
+        dto.items,
+      );
       const { subtotal, total_vat, total, itemsWithTotals } =
-        this.calculateTotals(dto.items, dto.discount_type, dto.discount_value);
+        this.calculateTotals(normalizedItems, dto.discount_type, dto.discount_value);
 
       updateData.subtotal = subtotal;
       updateData.total_vat = total_vat;
@@ -870,7 +899,7 @@ export class InvoiceService {
         `
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name, is_vat_exempt, vat_exemption_note),
                 items:invoice_items(*)
             `,
       )
@@ -1462,7 +1491,7 @@ export class InvoiceService {
         `
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name, is_vat_exempt, vat_exemption_note),
                 items:invoice_items(*)
             `,
       )
@@ -1539,7 +1568,7 @@ export class InvoiceService {
         `
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, rib_iban, rib_bic, rib_bank_name, is_vat_exempt, vat_exemption_note),
                 items:invoice_items(*)
             `,
       )

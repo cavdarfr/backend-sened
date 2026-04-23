@@ -58,6 +58,8 @@ interface CompanyEntity {
   rib_iban: string | null;
   rib_bic: string | null;
   rib_bank_name: string | null;
+  is_vat_exempt: boolean;
+  vat_exemption_note: string | null;
   default_vat_rate: number;
   default_payment_terms: number;
   terms_and_conditions: string | null;
@@ -256,9 +258,11 @@ export class CompanyService {
         siren: normalized.siren,
         vat_number: normalized.vat_number,
         country: normalized.country,
-        default_vat_rate: createCompanyDto.default_vat_rate || 20.0,
-        default_payment_terms: createCompanyDto.default_payment_terms || 30,
-        quote_validity_days: createCompanyDto.quote_validity_days || 30,
+        default_vat_rate: createCompanyDto.is_vat_exempt
+          ? 0
+          : createCompanyDto.default_vat_rate ?? 20.0,
+        default_payment_terms: createCompanyDto.default_payment_terms ?? 30,
+        quote_validity_days: createCompanyDto.quote_validity_days ?? 30,
       })
       .select()
       .single();
@@ -908,6 +912,8 @@ export class CompanyService {
     companyId: string,
     data: {
       default_vat_rate?: number;
+      is_vat_exempt?: boolean;
+      vat_exemption_note?: string;
       default_payment_terms?: number;
       quote_validity_days?: number;
       terms_and_conditions?: string;
@@ -934,6 +940,16 @@ export class CompanyService {
     const updateData: any = {};
     if (data.default_vat_rate !== undefined)
       updateData.default_vat_rate = data.default_vat_rate;
+    if (data.is_vat_exempt !== undefined) {
+      updateData.is_vat_exempt = data.is_vat_exempt;
+      if (data.is_vat_exempt) {
+        updateData.default_vat_rate = 0;
+      }
+    }
+    if (data.vat_exemption_note !== undefined)
+      updateData.vat_exemption_note =
+        data.vat_exemption_note?.trim() ||
+        "TVA non applicable, art. 293 B du CGI";
     if (data.default_payment_terms !== undefined)
       updateData.default_payment_terms = data.default_payment_terms;
     if (data.quote_validity_days !== undefined)
@@ -2868,6 +2884,78 @@ export class CompanyService {
     return { message: "Membre retiré avec succès" };
   }
 
+  async updateMemberRole(
+    userId: string,
+    companyId: string,
+    memberUserId: string,
+    nextRole: Exclude<CompanyRole, "superadmin">,
+  ): Promise<{ message: string }> {
+    const supabase = getSupabaseAdmin();
+    const accessContext = await this.checkUserAccessContext(userId, companyId);
+    this.ensureCanManageMembers(
+      accessContext.role,
+      accessContext.companyOwnerRole,
+    );
+
+    const allowedRoles = getInvitableRolesForCompanyType(
+      accessContext.companyOwnerRole,
+    );
+    if (!allowedRoles.includes(nextRole)) {
+      throw new ForbiddenException("Rôle non autorisé pour cette entreprise");
+    }
+
+    const { data: member, error: memberError } = await supabase
+      .from("user_companies")
+      .select("role")
+      .eq("user_id", memberUserId)
+      .eq("company_id", companyId)
+      .maybeSingle();
+
+    if (memberError) {
+      throw new BadRequestException(`Erreur: ${memberError.message}`);
+    }
+
+    if (!member) {
+      throw new NotFoundException("Membre introuvable");
+    }
+
+    const currentRole = member.role as CompanyRole;
+    const adminRole =
+      accessContext.companyOwnerRole === "accountant"
+        ? "accountant"
+        : "merchant_admin";
+
+    if (currentRole === adminRole && nextRole !== adminRole) {
+      const { count, error: countError } = await supabase
+        .from("user_companies")
+        .select("*", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("role", adminRole);
+
+      if (countError) {
+        throw new BadRequestException(`Erreur: ${countError.message}`);
+      }
+
+      if ((count || 0) <= 1) {
+        throw new BadRequestException(
+          "Cette entreprise doit conserver au moins un administrateur",
+        );
+      }
+    }
+
+    const { error } = await supabase
+      .from("user_companies")
+      .update({ role: nextRole })
+      .eq("user_id", memberUserId)
+      .eq("company_id", companyId);
+
+    if (error) {
+      throw new BadRequestException(`Erreur: ${error.message}`);
+    }
+
+    return { message: "Rôle mis à jour" };
+  }
+
   async cancelInvitation(
     userId: string,
     companyId: string,
@@ -2882,6 +2970,56 @@ export class CompanyService {
     return this.cancelCompanyInvitation(
       companyId,
       invitationId,
+      accessContext.companyOwnerRole,
+    );
+  }
+
+  async finalizeMemberInvitation(
+    userId: string,
+    companyId: string,
+    invitationId: string,
+  ): Promise<any> {
+    const accessContext = await this.checkUserAccessContext(userId, companyId);
+    this.ensureCanManageMembers(
+      accessContext.role,
+      accessContext.companyOwnerRole,
+    );
+
+    const supabase = getSupabaseAdmin();
+    const { data: invitation, error } = await supabase
+      .from("company_invitations")
+      .select("*")
+      .eq("id", invitationId)
+      .eq("company_id", companyId)
+      .eq("invitation_type", "member")
+      .is("accepted_at", null)
+      .maybeSingle();
+
+    if (error) {
+      throw new BadRequestException(`Erreur: ${error.message}`);
+    }
+
+    if (!invitation) {
+      throw new NotFoundException("Invitation introuvable");
+    }
+
+    if (this.shouldSyncMemberQuantity(accessContext.companyOwnerRole)) {
+      const billingSettled =
+        await this.subscriptionService.isMemberQuantityBillingSettled(
+          companyId,
+        );
+
+      if (!billingSettled) {
+        throw new BadRequestException(
+          "Le paiement du membre supplémentaire doit être confirmé avant l’envoi de l’invitation",
+        );
+      }
+    }
+
+    return this.deliverMemberInvitation(
+      userId,
+      companyId,
+      invitation,
       accessContext.companyOwnerRole,
     );
   }
@@ -3394,7 +3532,64 @@ export class CompanyService {
       );
     }
 
+    if (this.shouldSyncMemberQuantity(companyOwnerRole, role)) {
+      try {
+        const syncResult =
+          await this.subscriptionService.syncMemberQuantity(companyId);
+        if (syncResult?.client_secret) {
+          return {
+            ...invitation,
+            status: "payment_required",
+            client_secret: syncResult.client_secret,
+          };
+        }
+      } catch (syncError) {
+        await this.rollbackPendingMemberInvitation(supabase, invitation.id);
+
+        throw new BadRequestException(
+          this.getMemberBillingSyncErrorMessage(syncError),
+        );
+      }
+    }
+
+    return this.deliverMemberInvitation(
+      userId,
+      companyId,
+      invitation,
+      companyOwnerRole,
+    );
+  }
+
+  private async deliverMemberInvitation(
+    userId: string,
+    companyId: string,
+    invitation: any,
+    _companyOwnerRole: CompanyOwnerRole,
+  ): Promise<any> {
+    const supabase = getSupabaseAdmin();
+    const normalizedEmail = invitation.email.trim().toLowerCase();
+    const role = invitation.role as CompanyRole;
+
+    const { data: existingUser } = await supabase
+      .from("profiles")
+      .select("id")
+      .ilike("email", normalizedEmail)
+      .maybeSingle();
+
     if (existingUser) {
+      const { data: existingMember } = await supabase
+        .from("user_companies")
+        .select("id")
+        .eq("user_id", existingUser.id)
+        .eq("company_id", companyId)
+        .maybeSingle();
+
+      if (existingMember) {
+        throw new ConflictException(
+          "Cet utilisateur est déjà membre de cette entreprise",
+        );
+      }
+
       const { error: memberInsertError } = await supabase
         .from("user_companies")
         .insert({
@@ -3427,36 +3622,7 @@ export class CompanyService {
         );
       }
 
-      if (this.shouldSyncMemberQuantity(companyOwnerRole, role)) {
-        try {
-          await this.subscriptionService.syncMemberQuantity(companyId);
-        } catch (syncError) {
-          await this.rollbackAcceptedMemberInvitation(
-            supabase,
-            companyId,
-            invitation.id,
-            existingUser.id,
-          );
-
-          throw new BadRequestException(
-            this.getMemberBillingSyncErrorMessage(syncError),
-          );
-        }
-      }
-
       return { ...invitation, status: "accepted" };
-    }
-
-    if (this.shouldSyncMemberQuantity(companyOwnerRole, role)) {
-      try {
-        await this.subscriptionService.syncMemberQuantity(companyId);
-      } catch (syncError) {
-        await this.rollbackPendingMemberInvitation(supabase, invitation.id);
-
-        throw new BadRequestException(
-          this.getMemberBillingSyncErrorMessage(syncError),
-        );
-      }
     }
 
     const { data: company } = await supabase

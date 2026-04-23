@@ -31,6 +31,7 @@ import {
     ValidateRegistrationPromotionCodeResponseDto,
     ValidateSubscriptionPromotionCodeDto,
     ValidateSubscriptionPromotionCodeResponseDto,
+    ChangeSubscriptionResponseDto,
 } from './dto/subscription.dto';
 import { decryptRegistrationSecret, encryptRegistrationSecret } from '../../common/utils/registration-payload';
 import { normalizeBusinessIdentifiers } from '../../shared/utils/business-identifiers.util';
@@ -324,6 +325,171 @@ export class SubscriptionService {
         return stripePaymentMethod.type || null;
     }
 
+    private async getSubscriptionPaymentMethod(
+        stripe: Stripe,
+        subscription: Stripe.Subscription,
+        latestInvoice?: Stripe.Invoice | null,
+    ): Promise<Stripe.PaymentMethod | null> {
+        const paymentIntent = (latestInvoice as any)?.payment_intent as
+            | Stripe.PaymentIntent
+            | null
+            | undefined;
+        const paymentMethodRef =
+            paymentIntent?.payment_method
+            || subscription.default_payment_method
+            || null;
+
+        if (paymentMethodRef) {
+            if (typeof paymentMethodRef !== 'string') {
+                return paymentMethodRef as Stripe.PaymentMethod;
+            }
+
+            const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodRef);
+            return 'deleted' in paymentMethod ? null : paymentMethod;
+        }
+
+        const customerId = typeof subscription.customer === 'string'
+            ? subscription.customer
+            : subscription.customer?.id;
+
+        if (!customerId) {
+            return null;
+        }
+
+        const stripeCustomer = await stripe.customers.retrieve(customerId);
+        if ('deleted' in stripeCustomer && stripeCustomer.deleted) {
+            return null;
+        }
+
+        const defaultPaymentMethod =
+            stripeCustomer.invoice_settings?.default_payment_method || null;
+        if (!defaultPaymentMethod) {
+            return null;
+        }
+
+        if (typeof defaultPaymentMethod !== 'string') {
+            return defaultPaymentMethod as Stripe.PaymentMethod;
+        }
+
+        const paymentMethod = await stripe.paymentMethods.retrieve(defaultPaymentMethod);
+        return 'deleted' in paymentMethod ? null : paymentMethod;
+    }
+
+    private buildBankingPrefillFromPaymentMethod(
+        paymentMethod: Stripe.PaymentMethod | null,
+    ): { rib_iban: string; rib_bic: string; rib_bank_name: string } | null {
+        if (!paymentMethod) {
+            return null;
+        }
+
+        if (paymentMethod.type === 'card' && paymentMethod.card) {
+            const brand = paymentMethod.card.brand || 'carte';
+            const last4 = paymentMethod.card.last4 || '';
+            const expMonth = String(paymentMethod.card.exp_month || '').padStart(2, '0');
+            const expYear = paymentMethod.card.exp_year || '';
+            return {
+                rib_iban: `Carte ${brand} **** ${last4}`.slice(0, 34),
+                rib_bic: `${expMonth}/${expYear}`.slice(0, 11),
+                rib_bank_name: 'Carte bancaire',
+            };
+        }
+
+        if (paymentMethod.type === 'sepa_debit' && paymentMethod.sepa_debit) {
+            const sepa = paymentMethod.sepa_debit;
+            return {
+                rib_iban: `IBAN **** ${sepa.last4 || ''}`.slice(0, 34),
+                rib_bic: (sepa.bank_code || sepa.country || 'SEPA').slice(0, 11),
+                rib_bank_name: `Prélèvement SEPA${sepa.country ? ` ${sepa.country}` : ''}`.slice(0, 100),
+            };
+        }
+
+        return null;
+    }
+
+    private async prefillCompanyBankingOnce(
+        companyId: string | null,
+        subscription: Stripe.Subscription,
+        latestInvoice?: Stripe.Invoice | null,
+    ): Promise<void> {
+        if (!companyId) {
+            return;
+        }
+
+        const supabase = getSupabaseAdmin();
+        const { data: company } = await supabase
+            .from('companies')
+            .select('rib_iban, rib_bic, rib_bank_name')
+            .eq('id', companyId)
+            .maybeSingle();
+
+        if (
+            !company
+            || company.rib_iban
+            || company.rib_bic
+            || company.rib_bank_name
+        ) {
+            return;
+        }
+
+        const paymentMethod = await this.getSubscriptionPaymentMethod(
+            this.ensureStripe(),
+            subscription,
+            latestInvoice,
+        );
+        const bankingPrefill = this.buildBankingPrefillFromPaymentMethod(paymentMethod);
+        if (!bankingPrefill) {
+            return;
+        }
+
+        await supabase
+            .from('companies')
+            .update(bankingPrefill)
+            .eq('id', companyId);
+    }
+
+    private async prefillCompanyBankingBySubscriptionId(
+        stripeSubscriptionId: string,
+    ): Promise<void> {
+        const stripe = this.ensureStripe();
+        const supabase = getSupabaseAdmin();
+        const { data: localSubscription } = await supabase
+            .from('subscriptions')
+            .select('company_id')
+            .eq('stripe_subscription_id', stripeSubscriptionId)
+            .maybeSingle();
+
+        if (!localSubscription?.company_id) {
+            return;
+        }
+
+        const stripeSubscription = await stripe.subscriptions.retrieve(
+            stripeSubscriptionId,
+            { expand: ['latest_invoice.payment_intent'] },
+        );
+        await this.prefillCompanyBankingOnce(
+            localSubscription.company_id,
+            stripeSubscription,
+            stripeSubscription.latest_invoice as Stripe.Invoice | null,
+        );
+    }
+
+    private getLatestInvoiceClientSecret(
+        latestInvoice: Stripe.Invoice | null,
+    ): string | null {
+        const paymentIntent = (latestInvoice as any)?.payment_intent as
+            | Stripe.PaymentIntent
+            | null
+            | undefined;
+        if (
+            paymentIntent?.client_secret
+            && ['requires_action', 'requires_confirmation', 'requires_payment_method'].includes(paymentIntent.status)
+        ) {
+            return paymentIntent.client_secret;
+        }
+
+        return null;
+    }
+
     private async getDefaultSubscriptionPaymentMethodType(
         stripe: Stripe,
         stripeSubscriptionId: string,
@@ -377,7 +543,7 @@ export class SubscriptionService {
 
         if (paymentMethodType === 'sepa_debit') {
             return {
-                proration_behavior: 'create_prorations',
+                proration_behavior: 'always_invoice',
             };
         }
 
@@ -1217,6 +1383,18 @@ export class SubscriptionService {
 
         const user = await this.createSupabaseUserForPaidRegistration(session);
         await this.attachStripeSubscriptionToUser(session, user.id, stripeSubscription);
+        const { data: createdCompany } = await supabase
+            .from('companies')
+            .select('id')
+            .eq('owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        await this.prefillCompanyBankingOnce(
+            createdCompany?.id || null,
+            stripeSubscription,
+            latestInvoice,
+        );
 
         await supabase
             .from('registration_payment_sessions')
@@ -1312,6 +1490,11 @@ export class SubscriptionService {
             session.user_id,
             session,
             stripeSubscription,
+        );
+        await this.prefillCompanyBankingOnce(
+            company.id,
+            stripeSubscription,
+            latestInvoice,
         );
 
         await supabase
@@ -2631,6 +2814,7 @@ export class SubscriptionService {
                         pendingCompanySession,
                     );
                 }
+                await this.prefillCompanyBankingBySubscriptionId(subscriptionId);
                 break;
             }
 
@@ -2675,7 +2859,7 @@ export class SubscriptionService {
                     updated_at: new Date().toISOString(),
                 };
 
-                if (planId) {
+                if (planId && !sub.pending_update) {
                     updateData.plan_id = planId;
                 }
 
@@ -2724,6 +2908,7 @@ export class SubscriptionService {
                             pendingCompanySession,
                         );
                     }
+                    await this.prefillCompanyBankingBySubscriptionId(sub.id);
                 }
                 break;
             }
@@ -2846,8 +3031,10 @@ export class SubscriptionService {
     /**
      * Sync member quantity on Stripe subscription when members are added/removed.
      */
-    async syncMemberQuantity(companyId: string): Promise<void> {
-        if (!this.isStripeEnabled()) return;
+    async syncMemberQuantity(
+        companyId: string,
+    ): Promise<{ client_secret: string | null; status: string } | null> {
+        if (!this.isStripeEnabled()) return null;
 
         const stripe = this.ensureStripe();
         const supabase = getSupabaseAdmin();
@@ -2859,7 +3046,7 @@ export class SubscriptionService {
             .eq('company_id', companyId)
             .maybeSingle();
 
-        if (!subscription?.stripe_subscription_id) return;
+        if (!subscription?.stripe_subscription_id) return null;
 
         // Count extra members
         const extraMembers = await this.countExtraMembers(
@@ -2875,7 +3062,7 @@ export class SubscriptionService {
         let nextMemberItemId = subscription.stripe_member_item_id || null;
 
         if (extraMembers === (subscription.extra_members_quantity || 0)) {
-            return;
+            return null;
         }
 
         if (extraMembers <= 0) {
@@ -2898,7 +3085,7 @@ export class SubscriptionService {
             });
         } else {
             if (!subscription.plan_id) {
-                return;
+                return null;
             }
 
             const { data: plan } = await supabase
@@ -2908,7 +3095,7 @@ export class SubscriptionService {
                 .maybeSingle();
 
             if (!plan?.stripe_member_lookup_key) {
-                return;
+                return null;
             }
 
             const memberPriceId = await this.resolveStripePriceId(stripe, plan.stripe_member_lookup_key);
@@ -2925,15 +3112,107 @@ export class SubscriptionService {
             nextMemberItemId = createdItem.id;
         }
 
-        // Update DB
-        await supabase
+        const stripeSubscription = await stripe.subscriptions.retrieve(
+            subscription.stripe_subscription_id,
+            { expand: ['latest_invoice.payment_intent'] },
+        );
+        const latestInvoice = stripeSubscription.latest_invoice as Stripe.Invoice | null;
+        const clientSecret = this.getLatestInvoiceClientSecret(latestInvoice);
+
+        if (!clientSecret) {
+            await supabase
+                .from('subscriptions')
+                .update({
+                    stripe_member_item_id: nextMemberItemId,
+                    extra_members_quantity: extraMembers,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq('company_id', companyId);
+        }
+
+        if (!clientSecret && ['active', 'trialing'].includes(stripeSubscription.status)) {
+            await this.prefillCompanyBankingOnce(
+                companyId,
+                stripeSubscription,
+                latestInvoice,
+            );
+        }
+
+        return {
+            client_secret: clientSecret,
+            status: stripeSubscription.status,
+        };
+    }
+
+    async isMemberQuantityBillingSettled(companyId: string): Promise<boolean> {
+        if (!this.isStripeEnabled()) return true;
+
+        const stripe = this.ensureStripe();
+        const supabase = getSupabaseAdmin();
+
+        const { data: subscription } = await supabase
             .from('subscriptions')
-            .update({
-                stripe_member_item_id: nextMemberItemId,
-                extra_members_quantity: extraMembers,
-                updated_at: new Date().toISOString(),
-            })
-            .eq('company_id', companyId);
+            .select('stripe_subscription_id, stripe_base_item_id, stripe_member_item_id, extra_members_quantity')
+            .eq('company_id', companyId)
+            .maybeSingle();
+
+        if (!subscription?.stripe_subscription_id) return true;
+
+        const extraMembers = await this.countExtraMembers(
+            supabase,
+            companyId,
+            'merchant_admin',
+        );
+
+        const stripeSubscription = await stripe.subscriptions.retrieve(
+            subscription.stripe_subscription_id,
+            { expand: ['latest_invoice.payment_intent'] },
+        );
+        const latestInvoice = stripeSubscription.latest_invoice as Stripe.Invoice | null;
+        const paymentIntent = (latestInvoice as any)?.payment_intent as
+            | Stripe.PaymentIntent
+            | null
+            | undefined;
+
+        if ([
+            'requires_action',
+            'requires_confirmation',
+            'requires_payment_method',
+        ].includes(paymentIntent?.status || '')) {
+            return false;
+        }
+
+        const memberItem =
+            (subscription.stripe_member_item_id
+                ? stripeSubscription.items.data.find(
+                    (item) => item.id === subscription.stripe_member_item_id,
+                )
+                : null)
+            || stripeSubscription.items.data.find(
+                (item) => item.id !== subscription.stripe_base_item_id,
+            )
+            || null;
+        const stripeMemberQuantity = memberItem?.quantity || 0;
+
+        if (stripeMemberQuantity < extraMembers) {
+            return false;
+        }
+
+        if (
+            (subscription.extra_members_quantity || 0) !== extraMembers
+            || (memberItem?.id && memberItem.id !== subscription.stripe_member_item_id)
+        ) {
+            await supabase
+                .from('subscriptions')
+                .update({
+                    stripe_member_item_id: memberItem?.id || null,
+                    extra_members_quantity: extraMembers,
+                    updated_at: new Date().toISOString(),
+                })
+                .eq('company_id', companyId);
+        }
+
+        return true;
     }
 
     /**
@@ -2944,7 +3223,7 @@ export class SubscriptionService {
         planSlug: string,
         billingPeriod?: 'monthly' | 'yearly',
         explicitCompanyId?: string | null,
-    ): Promise<SubscriptionDto> {
+    ): Promise<ChangeSubscriptionResponseDto> {
         await this.legalDocumentService.ensurePlatformAcceptanceCurrent(userId);
         const supabase = getSupabaseAdmin();
         const effectiveTarget = await resolveEffectiveSubscriptionTarget(userId, explicitCompanyId);
@@ -3013,12 +3292,16 @@ export class SubscriptionService {
             }
 
             return {
-                ...(existingSubscription || {}),
-                plan_id: newPlan.id,
+                subscription: {
+                    ...(existingSubscription || {}),
+                    plan_id: newPlan.id,
+                    status: 'active',
+                    billing_period: effectiveBillingPeriod,
+                    extra_members_quantity: existingSubscription?.extra_members_quantity || 0,
+                    plan: newPlan as SubscriptionPlanDto,
+                } as SubscriptionDto,
+                client_secret: null,
                 status: 'active',
-                billing_period: effectiveBillingPeriod,
-                extra_members_quantity: existingSubscription?.extra_members_quantity || 0,
-                plan: newPlan as SubscriptionPlanDto,
             };
         }
 
@@ -3052,20 +3335,33 @@ export class SubscriptionService {
         const lookupKey = this.resolveLookupKey(newPlan, effectiveBillingPeriod);
         const newPriceId = await this.resolveStripePriceId(stripe, lookupKey);
 
-        // Swap the base plan item
-        await stripe.subscriptions.update(existingSubscription.stripe_subscription_id, {
+        // Swap the base plan item. pending_if_incomplete prevents Stripe from
+        // applying updates that require payment authentication before payment is settled.
+        const updatedStripeSubscription = await stripe.subscriptions.update(existingSubscription.stripe_subscription_id, {
             items: [{
                 id: baseItemId,
                 price: newPriceId,
             }],
-            proration_behavior: 'create_prorations',
+            proration_behavior: 'always_invoice',
+            payment_behavior: 'pending_if_incomplete',
             metadata: {
                 user_id: ownerUserId,
                 company_id: subscriptionCompanyId,
                 plan_id: newPlan.id,
                 billing_period: effectiveBillingPeriod,
             },
+            expand: ['latest_invoice.payment_intent'],
         });
+
+        const latestInvoice = updatedStripeSubscription.latest_invoice as Stripe.Invoice | null;
+        const clientSecret = this.getLatestInvoiceClientSecret(latestInvoice);
+        if (clientSecret || updatedStripeSubscription.pending_update) {
+            return {
+                subscription: await this.hydrateSubscription(supabase, existingSubscription) as SubscriptionDto,
+                client_secret: clientSecret,
+                status: clientSecret ? 'requires_payment_confirmation' : 'pending',
+            };
+        }
 
         // Update DB immediately (webhook will also sync)
         await supabase
@@ -3079,11 +3375,15 @@ export class SubscriptionService {
             .eq('company_id', subscriptionCompanyId);
 
         return {
-            ...existingSubscription,
-            plan_id: newPlan.id,
-            billing_period: effectiveBillingPeriod,
-            extra_members_quantity: existingSubscription.extra_members_quantity || 0,
-            plan: newPlan as SubscriptionPlanDto,
+            subscription: {
+                ...existingSubscription,
+                plan_id: newPlan.id,
+                billing_period: effectiveBillingPeriod,
+                extra_members_quantity: existingSubscription.extra_members_quantity || 0,
+                plan: newPlan as SubscriptionPlanDto,
+            } as SubscriptionDto,
+            client_secret: null,
+            status: updatedStripeSubscription.status,
         };
     }
 }

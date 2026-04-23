@@ -5,6 +5,7 @@ import {
   IsEmail,
   IsUrl,
   IsNumber,
+  IsBoolean,
   IsIn,
   IsUUID,
   MinLength,
@@ -105,6 +106,14 @@ export class CreateCompanyDto {
   @IsString()
   @MaxLength(100)
   rib_bank_name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  is_vat_exempt?: boolean;
+
+  @IsOptional()
+  @IsString()
+  vat_exemption_note?: string;
 
   @IsOptional()
   @IsNumber()
@@ -221,6 +230,14 @@ export class UpdateCompanyDto {
   rib_bank_name?: string;
 
   @IsOptional()
+  @IsBoolean()
+  is_vat_exempt?: boolean;
+
+  @IsOptional()
+  @IsString()
+  vat_exemption_note?: string;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   @Max(100)
@@ -272,6 +289,8 @@ export class CompanyResponseDto {
   rib_iban: string | null;
   rib_bic: string | null;
   rib_bank_name: string | null;
+  is_vat_exempt: boolean;
+  vat_exemption_note: string | null;
   default_vat_rate: number;
   default_payment_terms: number;
   terms_and_conditions: string | null;
@@ -601,6 +620,20 @@ export class UpdateCompanyBankingDto {
   rib_bank_name?: string;
 }
 
+export class UpdateMemberRoleDto {
+  @IsIn([
+    "merchant_admin",
+    "merchant_consultant",
+    "accountant",
+    "accountant_consultant",
+  ])
+  role:
+    | "merchant_admin"
+    | "merchant_consultant"
+    | "accountant"
+    | "accountant_consultant";
+}
+
 /**
  * DTO pour lier un expert-comptable
  */
@@ -740,6 +773,14 @@ export class UpdateCompanySettingsDto {
   @Min(0)
   @Max(100)
   default_vat_rate?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  is_vat_exempt?: boolean;
+
+  @IsOptional()
+  @IsString()
+  vat_exemption_note?: string;
 
   @IsOptional()
   @IsNumber()

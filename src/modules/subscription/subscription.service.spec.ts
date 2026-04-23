@@ -1,10 +1,19 @@
 import { getSupabaseAdmin } from '../../config/supabase.config';
+import { resolveEffectiveSubscriptionTarget } from '../../common/subscription/effective-subscription';
 import { SubscriptionService, buildSubscriptionMemberUsage } from './subscription.service';
 
 jest.mock('../../config/supabase.config', () => ({
     getSupabaseAdmin: jest.fn(),
     getSupabaseClient: jest.fn(),
 }));
+
+jest.mock('../../common/subscription/effective-subscription', () => {
+    const actual = jest.requireActual('../../common/subscription/effective-subscription');
+    return {
+        ...actual,
+        resolveEffectiveSubscriptionTarget: jest.fn(),
+    };
+});
 
 function createSyncMemberQuantitySupabaseMock(options?: {
     stripeMemberItemId?: string | null;
@@ -81,6 +90,89 @@ function createSyncMemberQuantitySupabaseMock(options?: {
     };
 }
 
+function createChangePlanSupabaseMock() {
+    let updatedPayload: Record<string, any> | null = null;
+    const existingSubscription = {
+        id: 'sub_row_123',
+        user_id: 'owner_123',
+        company_id: 'company_123',
+        plan_id: 'old_plan_123',
+        status: 'active',
+        billing_period: 'monthly',
+        stripe_customer_id: 'cus_123',
+        stripe_subscription_id: 'sub_123',
+        stripe_base_item_id: 'si_base_123',
+        stripe_member_item_id: null,
+        current_period_start: '2026-04-01T00:00:00.000Z',
+        current_period_end: '2026-05-01T00:00:00.000Z',
+        extra_members_quantity: 0,
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-01T00:00:00.000Z',
+    };
+    const oldPlan = {
+        id: 'old_plan_123',
+        slug: 'essentiel',
+        name: 'Essentiel',
+        stripe_lookup_key_monthly: 'essentiel_monthly',
+        stripe_lookup_key_yearly: 'essentiel_yearly',
+    };
+    const newPlan = {
+        id: 'new_plan_123',
+        slug: 'business',
+        name: 'Business',
+        stripe_lookup_key_monthly: 'business_monthly',
+        stripe_lookup_key_yearly: 'business_yearly',
+    };
+
+    return {
+        supabase: {
+            from: jest.fn((table: string) => {
+                if (table === 'subscriptions') {
+                    return {
+                        select: jest.fn(() => ({
+                            eq: jest.fn(() => ({
+                                maybeSingle: jest.fn().mockResolvedValue({
+                                    data: existingSubscription,
+                                }),
+                            })),
+                        })),
+                        update: jest.fn((payload: Record<string, any>) => {
+                            updatedPayload = payload;
+                            return {
+                                eq: jest.fn().mockResolvedValue({ error: null }),
+                            };
+                        }),
+                    };
+                }
+
+                if (table === 'subscription_plans') {
+                    return {
+                        select: jest.fn(() => {
+                            let selectedById = false;
+                            const chain: any = {
+                                eq: jest.fn((column: string) => {
+                                    if (column === 'id') selectedById = true;
+                                    return chain;
+                                }),
+                                single: jest.fn().mockImplementation(() => Promise.resolve({
+                                    data: selectedById ? oldPlan : newPlan,
+                                    error: null,
+                                })),
+                            };
+                            return chain;
+                        }),
+                    };
+                }
+
+                throw new Error(`Unexpected table: ${table}`);
+            }),
+        },
+        existingSubscription,
+        newPlan,
+        getUpdatedPayload: () => updatedPayload,
+    };
+}
+
 describe('buildSubscriptionMemberUsage', () => {
     it('includes pending merchant invitations in billable member counts', () => {
         expect(
@@ -144,7 +236,7 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             del: jest.Mock;
             update: jest.Mock;
         };
-        subscriptions: { retrieve: jest.Mock; create: jest.Mock };
+        subscriptions: { retrieve: jest.Mock; create: jest.Mock; update: jest.Mock };
         customers: { retrieve: jest.Mock; create: jest.Mock };
         prices: { list: jest.Mock };
         promotionCodes: { list: jest.Mock };
@@ -189,6 +281,7 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             subscriptions: {
                 retrieve: jest.fn(),
                 create: jest.fn(),
+                update: jest.fn(),
             },
             customers: {
                 retrieve: jest.fn(),
@@ -251,7 +344,7 @@ describe('SubscriptionService.syncMemberQuantity', () => {
         );
     });
 
-    it('creates a member add-on without immediate payment when the default payment method is SEPA', async () => {
+    it('creates a member add-on with an immediate invoice when the default payment method is SEPA', async () => {
         const supabaseMock = createSyncMemberQuantitySupabaseMock({
             stripeMemberItemId: null,
             extraMembersQuantity: 0,
@@ -289,7 +382,7 @@ describe('SubscriptionService.syncMemberQuantity', () => {
                 subscription: 'sub_123',
                 price: 'price_member_123',
                 quantity: 2,
-                proration_behavior: 'create_prorations',
+                proration_behavior: 'always_invoice',
             }),
         );
         expect(stripeMock.subscriptionItems.create.mock.calls[0][0]).not.toHaveProperty(
@@ -303,7 +396,7 @@ describe('SubscriptionService.syncMemberQuantity', () => {
         );
     });
 
-    it('updates member quantity without immediate payment when the default payment method is SEPA', async () => {
+    it('updates member quantity with an immediate invoice when the default payment method is SEPA', async () => {
         const supabaseMock = createSyncMemberQuantitySupabaseMock({
             stripeMemberItemId: 'si_member_123',
             extraMembersQuantity: 1,
@@ -329,12 +422,80 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             'si_member_123',
             expect.objectContaining({
                 quantity: 2,
-                proration_behavior: 'create_prorations',
+                proration_behavior: 'always_invoice',
             }),
         );
         expect(stripeMock.subscriptionItems.update.mock.calls[0][1]).not.toHaveProperty(
             'payment_behavior',
         );
+    });
+
+    it('returns a client secret and keeps the local plan unchanged when a plan change requires payment confirmation', async () => {
+        const supabaseMock = createChangePlanSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.mocked(resolveEffectiveSubscriptionTarget).mockResolvedValue({
+            can_manage_billing: true,
+            subscription_company_id: 'company_123',
+            owner_user_id: 'owner_123',
+            company_owner_role: 'merchant_admin',
+        } as any);
+        stripeMock.prices.list.mockResolvedValue({ data: [{ id: 'price_business_monthly' }] });
+        stripeMock.subscriptions.update.mockResolvedValue({
+            id: 'sub_123',
+            status: 'active',
+            pending_update: { expires_at: 1770000000 },
+            latest_invoice: {
+                payment_intent: {
+                    status: 'requires_action',
+                    client_secret: 'pi_secret_123',
+                },
+            },
+        });
+
+        const result = await service.changePlan('owner_123', 'business', 'monthly', 'company_123');
+
+        expect(stripeMock.subscriptions.update).toHaveBeenCalledWith(
+            'sub_123',
+            expect.objectContaining({
+                payment_behavior: 'pending_if_incomplete',
+                proration_behavior: 'always_invoice',
+            }),
+        );
+        expect(result.client_secret).toBe('pi_secret_123');
+        expect(result.subscription.plan_id).toBe('old_plan_123');
+        expect(supabaseMock.getUpdatedPayload()).toBeNull();
+    });
+
+    it('updates the local subscription when a plan change is settled immediately', async () => {
+        const supabaseMock = createChangePlanSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.mocked(resolveEffectiveSubscriptionTarget).mockResolvedValue({
+            can_manage_billing: true,
+            subscription_company_id: 'company_123',
+            owner_user_id: 'owner_123',
+            company_owner_role: 'merchant_admin',
+        } as any);
+        stripeMock.prices.list.mockResolvedValue({ data: [{ id: 'price_business_monthly' }] });
+        stripeMock.subscriptions.update.mockResolvedValue({
+            id: 'sub_123',
+            status: 'active',
+            pending_update: null,
+            latest_invoice: {
+                payment_intent: {
+                    status: 'succeeded',
+                    client_secret: 'pi_secret_123',
+                },
+            },
+        });
+
+        const result = await service.changePlan('owner_123', 'business', 'monthly', 'company_123');
+
+        expect(result.client_secret).toBeNull();
+        expect(result.subscription.plan_id).toBe('new_plan_123');
+        expect(supabaseMock.getUpdatedPayload()).toEqual(expect.objectContaining({
+            plan_id: 'new_plan_123',
+            billing_period: 'monthly',
+        }));
     });
 
     it('validates a percent-off promotion code for registration pricing', async () => {

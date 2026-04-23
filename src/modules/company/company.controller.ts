@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Delete,
   Body,
   Param,
@@ -34,6 +35,7 @@ import {
   InviteLinkedClientMerchantAdminDto,
   InviteNewMerchantAdminDto,
   InviteAccountantFirmDto,
+  UpdateMemberRoleDto,
   AccountantDocumentsQueryDto,
   BulkDownloadLinkedClientDocumentsDto,
 } from "./dto/company.dto";
@@ -562,6 +564,27 @@ export class CompanyController {
     @Param("memberId", ParseUUIDPipe) memberId: string,
   ) {
     return this.companyService.removeMember(userId, id, memberId);
+  }
+
+  @Patch(":id/members/:memberId/role")
+  @HttpCode(HttpStatus.OK)
+  async updateMemberRole(
+    @CurrentUser("id") userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("memberId", ParseUUIDPipe) memberId: string,
+    @Body() dto: UpdateMemberRoleDto,
+  ) {
+    return this.companyService.updateMemberRole(userId, id, memberId, dto.role);
+  }
+
+  @Post(":id/invitations/:invitationId/finalize")
+  @HttpCode(HttpStatus.OK)
+  async finalizeInvitation(
+    @CurrentUser("id") userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("invitationId", ParseUUIDPipe) invitationId: string,
+  ) {
+    return this.companyService.finalizeMemberInvitation(userId, id, invitationId);
   }
 
   @Delete(":id/invitations/:invitationId")

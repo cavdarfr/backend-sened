@@ -67,7 +67,7 @@ export class QuoteService {
             city
         ),
         items:quote_items(*),
-        company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url)
+        company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, is_vat_exempt, vat_exemption_note)
     `;
 
     constructor(
@@ -260,6 +260,27 @@ export class QuoteService {
         };
     }
 
+    private async normalizeItemsForCompanyVat(
+        companyId: string,
+        items: QuoteItemDto[],
+    ): Promise<QuoteItemDto[]> {
+        const supabase = getSupabaseAdmin();
+        const { data: company } = await supabase
+            .from('companies')
+            .select('is_vat_exempt')
+            .eq('id', companyId)
+            .maybeSingle();
+
+        if (!company?.is_vat_exempt) {
+            return items;
+        }
+
+        return items.map((item) => ({
+            ...item,
+            vat_rate: 0,
+        }));
+    }
+
     /**
      * Génère le numéro de devis
      */
@@ -310,8 +331,9 @@ export class QuoteService {
         const validityDays = settings?.default_quote_validity_days || 30;
 
         // Calculer les totaux
+        const normalizedItems = await this.normalizeItemsForCompanyVat(companyId, dto.items);
         const { subtotal, total_vat, total, itemsWithTotals } = this.calculateTotals(
-            dto.items,
+            normalizedItems,
             dto.discount_type,
             dto.discount_value,
         );
@@ -480,7 +502,7 @@ export class QuoteService {
             .select(`
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, is_vat_exempt, vat_exemption_note),
                 items:quote_items(*)
             `)
             .eq('id', quoteId);
@@ -691,8 +713,9 @@ export class QuoteService {
 
         // Si on met à jour les lignes, recalculer les totaux
         if (dto.items) {
+            const normalizedItems = await this.normalizeItemsForCompanyVat(companyId, dto.items);
             const { subtotal, total_vat, total, itemsWithTotals } = this.calculateTotals(
-                dto.items,
+                normalizedItems,
                 dto.discount_type,
                 dto.discount_value,
             );
@@ -861,7 +884,7 @@ export class QuoteService {
             .select(`
                 *,
                 client:clients(*),
-                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url),
+                company:companies(id, name, legal_name, siren, vat_number, address, city, postal_code, phone, email, logo_url, is_vat_exempt, vat_exemption_note),
                 items:quote_items(*)
             `)
             .eq('id', quoteId)
@@ -1224,6 +1247,8 @@ export class QuoteService {
                 phone: quote.company?.phone,
                 email: quote.company?.email,
                 logo_url: quote.company?.logo_url,
+                is_vat_exempt: Boolean(quote.company?.is_vat_exempt),
+                vat_exemption_note: quote.company?.vat_exemption_note,
             },
             client: {
                 company_name: quote.client?.company_name,
