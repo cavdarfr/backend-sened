@@ -41,6 +41,7 @@ function createInviteSupabaseMock(options?: {
     signup_city?: string | null;
     signup_country?: string | null;
   } | null = null;
+  const invitationUpdates: Record<string, any>[] = [];
 
   return {
     supabase: {
@@ -116,8 +117,11 @@ function createInviteSupabaseMock(options?: {
                 }),
               };
             }),
-            update: jest.fn(() => ({
-              eq: jest.fn().mockResolvedValue({ error: null }),
+            update: jest.fn((payload) => ({
+              eq: jest.fn().mockImplementation(() => {
+                invitationUpdates.push(payload);
+                return Promise.resolve({ error: null });
+              }),
             })),
             insert: jest.fn((payload) => {
               insertedPayload = payload;
@@ -181,6 +185,7 @@ function createInviteSupabaseMock(options?: {
       }),
     },
     getInsertedPayload: () => insertedPayload,
+    getInvitationUpdates: () => invitationUpdates,
   };
 }
 
@@ -345,7 +350,10 @@ function createExistingMerchantSupabaseMock(options?: {
 describe("CompanyService member management permissions", () => {
   let service: CompanyService;
   let notificationService: { sendInviteEmail: jest.Mock };
-  let subscriptionService: { syncMemberQuantity: jest.Mock };
+  let subscriptionService: {
+    syncMemberQuantity: jest.Mock;
+    isMemberQuantityBillingSettled: jest.Mock;
+  };
   const originalRootSuperadminEmail = process.env.SUPERADMIN_ROOT_EMAIL;
 
   beforeEach(() => {
@@ -354,6 +362,7 @@ describe("CompanyService member management permissions", () => {
     };
     subscriptionService = {
       syncMemberQuantity: jest.fn().mockResolvedValue(undefined),
+      isMemberQuantityBillingSettled: jest.fn().mockResolvedValue(true),
     };
 
     service = new CompanyService(
@@ -455,6 +464,39 @@ describe("CompanyService member management permissions", () => {
 
     expect(result.status).toBe("pending");
     expect(rollbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a merchant invitation blocked and unsent when member billing requires payment confirmation", async () => {
+    const inviteMock = createInviteSupabaseMock();
+
+    subscriptionService.syncMemberQuantity.mockResolvedValue({
+      client_secret: "pi_secret_123",
+      status: "active",
+    });
+
+    jest.mocked(getSupabaseAdmin).mockReturnValue(inviteMock.supabase as any);
+    mockUserAccessContext("merchant_admin", "merchant_admin");
+
+    const result = await service.inviteMember(
+      "user-1",
+      "company-1",
+      "member@example.com",
+      "merchant_consultant",
+      "admin@example.com",
+    );
+
+    expect(result).toMatchObject({
+      status: "payment_required",
+      billing_status: "payment_required",
+      client_secret: "pi_secret_123",
+    });
+    expect(inviteMock.getInsertedPayload()).toMatchObject({
+      billing_status: "settled",
+    });
+    expect(inviteMock.getInvitationUpdates()).toContainEqual({
+      billing_status: "payment_required",
+    });
+    expect(notificationService.sendInviteEmail).not.toHaveBeenCalled();
   });
 
   it("rejects duplicate pending invitations with a business error", async () => {
@@ -1146,21 +1188,23 @@ describe("CompanyService member management permissions", () => {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
-                is: jest.fn().mockReturnValue({
-                  gt: jest.fn().mockReturnValue({
-                    maybeSingle: jest.fn().mockResolvedValue({
-                      data: {
-                        company_id: "merchant-1",
-                        email: "cabinet@example.com",
-                        role: "accountant",
-                        invitation_type: "accountant_firm",
-                        expires_at: "2026-04-15T10:00:00.000Z",
-                        invited_by: "user-1",
-                        invited_firm_name: "Cabinet Test",
-                        invited_firm_siren: "123456789",
-                        company: { name: "Entreprise Test" },
-                      },
-                      error: null,
+                eq: jest.fn().mockReturnValue({
+                  is: jest.fn().mockReturnValue({
+                    gt: jest.fn().mockReturnValue({
+                      maybeSingle: jest.fn().mockResolvedValue({
+                        data: {
+                          company_id: "merchant-1",
+                          email: "cabinet@example.com",
+                          role: "accountant",
+                          invitation_type: "accountant_firm",
+                          expires_at: "2026-04-15T10:00:00.000Z",
+                          invited_by: "user-1",
+                          invited_firm_name: "Cabinet Test",
+                          invited_firm_siren: "123456789",
+                          company: { name: "Entreprise Test" },
+                        },
+                        error: null,
+                      }),
                     }),
                   }),
                 }),
@@ -1206,26 +1250,28 @@ describe("CompanyService member management permissions", () => {
           return {
             select: jest.fn(() => ({
               eq: jest.fn().mockReturnValue({
-                is: jest.fn().mockReturnValue({
-                  gt: jest.fn().mockReturnValue({
-                    maybeSingle: jest.fn().mockResolvedValue({
-                      data: {
-                        company_id: "cabinet-1",
-                        email: "merchant@example.com",
-                        role: "merchant_admin",
-                        invitation_type: "merchant_signup",
-                        expires_at: "2026-04-15T10:00:00.000Z",
-                        invited_by: "user-1",
-                        signup_company_name: "Marchand Test",
-                        signup_siren: "123456789",
-                        signup_siret: "12345678900012",
-                        signup_address: "1 rue Exemple",
-                        signup_postal_code: "75001",
-                        signup_city: "Paris",
-                        signup_country: "FR",
-                        company: { name: "Cabinet Test" },
-                      },
-                      error: null,
+                eq: jest.fn().mockReturnValue({
+                  is: jest.fn().mockReturnValue({
+                    gt: jest.fn().mockReturnValue({
+                      maybeSingle: jest.fn().mockResolvedValue({
+                        data: {
+                          company_id: "cabinet-1",
+                          email: "merchant@example.com",
+                          role: "merchant_admin",
+                          invitation_type: "merchant_signup",
+                          expires_at: "2026-04-15T10:00:00.000Z",
+                          invited_by: "user-1",
+                          signup_company_name: "Marchand Test",
+                          signup_siren: "123456789",
+                          signup_siret: "12345678900012",
+                          signup_address: "1 rue Exemple",
+                          signup_postal_code: "75001",
+                          signup_city: "Paris",
+                          signup_country: "FR",
+                          company: { name: "Cabinet Test" },
+                        },
+                        error: null,
+                      }),
                     }),
                   }),
                 }),

@@ -87,15 +87,19 @@ export function quoteNewEmail(data: QuoteEmailData): { subject: string; html: st
                 <div class="amount-value" style="color: #5b21b6;">${amountStr}</div>
             </div>
             
-            <div class="alert alert-info">
-                <span class="alert-icon">⏰</span>
-                <div>Ce devis est valable jusqu'au <strong>${validUntilStr}</strong>. Passé ce délai, les conditions pourront être révisées.</div>
-            </div>
-            
-            ${signatureUrl ? `
-            <div class="cta-container">
-                <a href="${signatureUrl}" class="btn btn-success">Signer ce devis en toute sécurité</a>
-            </div>
+	            <div class="alert alert-info">
+	                <span class="alert-icon">⏰</span>
+	                <div>Ce devis est valable jusqu'au <strong>${validUntilStr}</strong>. Passé ce délai, les conditions pourront être révisées.</div>
+	            </div>
+	            
+	            <p class="message">
+	                Vous trouverez également ce devis en pièce jointe au format PDF.
+	            </p>
+	            
+	            ${signatureUrl ? `
+	            <div class="cta-container">
+	                <a href="${signatureUrl}" class="btn btn-success">Signer ce devis en toute sécurité</a>
+	            </div>
             <p style="text-align: center; color: #6b7280; font-size: 13px;">
                 Cliquez sur le bouton pour consulter ce devis et lancer la signature électronique sécurisée
             </p>
@@ -105,16 +109,12 @@ export function quoteNewEmail(data: QuoteEmailData): { subject: string; html: st
                 <a href="${data.termsUrl}" style="color: #2563eb; text-decoration: none;">Lire les CGV associées à ce devis →</a>
             </p>
             ` : ''}
-            
-            <div class="divider"></div>
-            
-            <p class="message">
-                Vous trouverez également ce devis en pièce jointe au format PDF.
-            </p>
-            
-            <div class="signature">
-                <p>N'hésitez pas à nous contacter pour toute question.</p>
-                <p>Cordialement,</p>
+	            
+	            <div class="divider"></div>
+	            
+	            <div class="signature">
+	                <p>N'hésitez pas à nous contacter pour toute question.</p>
+	                <p>Cordialement,</p>
                 <p class="signature-name">${data.companyName}</p>
             </div>
         </div>
@@ -268,10 +268,10 @@ export function quoteAcceptedEmail(data: QuoteEmailData): { subject: string; htm
                     <span class="info-value" style="color: #059669;">${amountStr}</span>
                 </div>
             </div>
-            
-            <p class="message">
-                Une facture vous sera transmise dans les plus brefs délais.
-            </p>
+	            
+	            <p class="message">
+	                Une facture vous sera transmise prochainement.
+	            </p>
             
             <div class="divider"></div>
             
@@ -297,7 +297,7 @@ Nous vous remercions pour votre confiance. Votre commande est en cours de traite
 
 Montant : ${amountStr}
 
-Une facture vous sera transmise dans les plus brefs délais.
+	Une facture vous sera transmise prochainement.
 
 À très bientôt !
 ${data.companyName}

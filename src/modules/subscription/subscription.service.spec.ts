@@ -961,6 +961,10 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             company_creation_mode: 'create',
             company_name: 'Demo',
             siren: '123456789',
+            address: '10 rue de Paris',
+            postal_code: '75001',
+            city: 'Paris',
+            country: 'FR',
             role: 'merchant_admin',
             plan_slug: 'essentiel',
             billing_period: 'monthly',
@@ -969,8 +973,21 @@ describe('SubscriptionService.syncMemberQuantity', () => {
         });
 
         expect(legalDocumentServiceMock.validateCurrentPlatformAcceptanceTimestamp).toHaveBeenCalled();
+        expect(stripeMock.customers.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                email: 'test@example.com',
+                name: 'Demo',
+                address: {
+                    line1: '10 rue de Paris',
+                    postal_code: '75001',
+                    city: 'Paris',
+                    country: 'FR',
+                },
+            }),
+        );
         expect(stripeMock.subscriptions.create).toHaveBeenCalledWith(
             expect.objectContaining({
+                automatic_tax: { enabled: true },
                 discounts: [{ promotion_code: 'promo_123' }],
             }),
         );
@@ -1052,6 +1069,11 @@ describe('SubscriptionService.syncMemberQuantity', () => {
         expect(stripeMock.subscriptions.create).toHaveBeenCalledWith(
             expect.not.objectContaining({
                 discounts: expect.anything(),
+            }),
+        );
+        expect(stripeMock.subscriptions.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                automatic_tax: { enabled: true },
             }),
         );
     });

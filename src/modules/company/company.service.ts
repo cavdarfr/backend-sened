@@ -2662,6 +2662,7 @@ export class CompanyService {
         "company_id, email, role, invitation_type, expires_at, invited_by, invited_firm_name, invited_firm_siren, signup_company_name, signup_siren, signup_siret, signup_address, signup_postal_code, signup_city, signup_country, company:companies(name)",
       )
       .eq("token", token)
+      .eq("billing_status", "settled")
       .is("accepted_at", null)
       .gt("expires_at", new Date().toISOString())
       .maybeSingle();
@@ -2730,7 +2731,7 @@ export class CompanyService {
     // Also fetch pending invitations
     const { data: invitations } = await supabase
       .from("company_invitations")
-      .select("id, email, role, created_at, expires_at")
+      .select("id, email, role, created_at, expires_at, billing_status")
       .eq("company_id", companyId)
       .eq("invitation_type", "member")
       .is("accepted_at", null)
@@ -3018,6 +3019,19 @@ export class CompanyService {
           "Le paiement du membre supplémentaire doit être confirmé avant l’envoi de l’invitation",
         );
       }
+
+      const { error: billingStatusError } = await supabase
+        .from("company_invitations")
+        .update({ billing_status: "settled" })
+        .eq("id", invitation.id);
+
+      if (billingStatusError) {
+        throw new BadRequestException(
+          `Erreur lors de la validation du paiement de l'invitation: ${billingStatusError.message}`,
+        );
+      }
+
+      invitation.billing_status = "settled";
     }
 
     return this.deliverMemberInvitation(
@@ -3588,6 +3602,7 @@ export class CompanyService {
         role,
         invited_by: userId,
         invitation_type: invitationType,
+        billing_status: "settled",
       })
       .select()
       .single();
@@ -3609,8 +3624,22 @@ export class CompanyService {
         const syncResult =
           await this.subscriptionService.syncMemberQuantity(companyId);
         if (syncResult?.client_secret) {
+          const { error: billingStatusError } = await supabase
+            .from("company_invitations")
+            .update({ billing_status: "payment_required" })
+            .eq("id", invitation.id);
+
+          if (billingStatusError) {
+            await this.rollbackPendingMemberInvitation(supabase, invitation.id);
+
+            throw new BadRequestException(
+              `Erreur lors du blocage de l'invitation en attente de paiement: ${billingStatusError.message}`,
+            );
+          }
+
           return {
             ...invitation,
+            billing_status: "payment_required",
             status: "payment_required",
             client_secret: syncResult.client_secret,
           };

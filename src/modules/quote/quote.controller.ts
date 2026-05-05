@@ -252,7 +252,7 @@ export class QuoteController {
         
         return {
             ...result,
-            message: 'Devis signé avec succès. Une facture a été générée.',
+	            message: 'Devis signé avec succès. Une facture a été générée et sera envoyée prochainement.',
         };
     }
 

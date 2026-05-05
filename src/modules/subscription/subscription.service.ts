@@ -92,6 +92,17 @@ interface SubscriptionMemberUsage {
     billable_extra_members: number;
 }
 
+interface StripeCustomerBillingDetails {
+    email?: string | null;
+    name?: string | null;
+    address?: {
+        line1?: string | null;
+        city?: string | null;
+        postal_code?: string | null;
+        country?: string | null;
+    } | null;
+}
+
 export function buildSubscriptionMemberUsage(
     totalMembers: number,
     pendingInvitations: number,
@@ -743,6 +754,65 @@ export class SubscriptionService {
         return normalized as CreateCompanyDto;
     }
 
+    private cleanStripeCustomerValue(value?: string | null): string | undefined {
+        const trimmed = value?.trim();
+        return trimmed || undefined;
+    }
+
+    private buildStripeCustomerAddress(
+        details?: StripeCustomerBillingDetails | null,
+    ): NonNullable<Stripe.CustomerCreateParams['address']> | undefined {
+        const address = details?.address;
+        if (!address) {
+            return undefined;
+        }
+
+        const country = this.cleanStripeCustomerValue(address.country)?.toUpperCase();
+        const stripeAddress = {
+            line1: this.cleanStripeCustomerValue(address.line1),
+            city: this.cleanStripeCustomerValue(address.city),
+            postal_code: this.cleanStripeCustomerValue(address.postal_code),
+            country: country || undefined,
+        };
+
+        return Object.values(stripeAddress).some(Boolean)
+            ? stripeAddress
+            : undefined;
+    }
+
+    private buildStripeCustomerParams(
+        details?: StripeCustomerBillingDetails | null,
+    ): Pick<Stripe.CustomerCreateParams, 'email' | 'name' | 'address'> {
+        return {
+            email: this.cleanStripeCustomerValue(details?.email),
+            name: this.cleanStripeCustomerValue(details?.name),
+            address: this.buildStripeCustomerAddress(details),
+        };
+    }
+
+    private async updateStripeCustomerBillingDetails(
+        stripe: Stripe,
+        customerId: string,
+        details?: StripeCustomerBillingDetails | null,
+    ): Promise<void> {
+        const params = this.buildStripeCustomerParams(details);
+        const updateParams: Stripe.CustomerUpdateParams = {};
+
+        if (params.email) {
+            updateParams.email = params.email;
+        }
+        if (params.name) {
+            updateParams.name = params.name;
+        }
+        if (params.address) {
+            updateParams.address = params.address;
+        }
+
+        if (Object.keys(updateParams).length > 0) {
+            await stripe.customers.update(customerId, updateParams);
+        }
+    }
+
     private async getPendingCompanyAccountantName(
         accountantCompanyId?: string | null,
     ): Promise<string | null> {
@@ -877,9 +947,18 @@ export class SubscriptionService {
         stripe: Stripe,
         supabase: any,
         userId: string,
-        options?: { existingCustomerId?: string | null; companyName?: string | null },
+        options?: {
+            existingCustomerId?: string | null;
+            companyName?: string | null;
+            billingDetails?: StripeCustomerBillingDetails | null;
+        },
     ): Promise<string> {
         if (options?.existingCustomerId) {
+            await this.updateStripeCustomerBillingDetails(
+                stripe,
+                options.existingCustomerId,
+                options.billingDetails,
+            );
             return options.existingCustomerId;
         }
 
@@ -893,6 +972,11 @@ export class SubscriptionService {
             .maybeSingle();
 
         if (existingSubscription?.stripe_customer_id) {
+            await this.updateStripeCustomerBillingDetails(
+                stripe,
+                existingSubscription.stripe_customer_id,
+                options?.billingDetails,
+            );
             return existingSubscription.stripe_customer_id;
         }
 
@@ -906,6 +990,11 @@ export class SubscriptionService {
             .maybeSingle();
 
         if (existingPendingSession?.stripe_customer_id) {
+            await this.updateStripeCustomerBillingDetails(
+                stripe,
+                existingPendingSession.stripe_customer_id,
+                options?.billingDetails,
+            );
             return existingPendingSession.stripe_customer_id;
         }
 
@@ -915,12 +1004,17 @@ export class SubscriptionService {
             .eq('id', userId)
             .single();
 
-        const customer = await stripe.customers.create({
+        const customerParams = this.buildStripeCustomerParams({
             email: profile?.email,
             name:
                 options?.companyName
                 || [profile?.first_name, profile?.last_name].filter(Boolean).join(' ')
                 || undefined,
+            address: options?.billingDetails?.address,
+        });
+
+        const customer = await stripe.customers.create({
+            ...customerParams,
             metadata: { user_id: userId },
         });
 
@@ -2063,6 +2157,16 @@ export class SubscriptionService {
             {
                 existingCustomerId: session.stripe_customer_id,
                 companyName: companySummary.legal_name || companySummary.name,
+                billingDetails: {
+                    email: companySummary.email,
+                    name: companySummary.legal_name || companySummary.name,
+                    address: {
+                        line1: companySummary.address,
+                        postal_code: companySummary.postal_code,
+                        city: companySummary.city,
+                        country: companySummary.country || 'FR',
+                    },
+                },
             },
         );
 
@@ -2070,6 +2174,7 @@ export class SubscriptionService {
             customer: customerId,
             items: [{ price: pricingContext.basePriceId, quantity: 1 }],
             billing_mode: { type: 'flexible' },
+            automatic_tax: { enabled: true },
             payment_behavior: 'default_incomplete',
             payment_settings: {
                 save_default_payment_method: 'on_subscription',
@@ -2197,7 +2302,28 @@ export class SubscriptionService {
         supabase: any,
         userId: string,
         companyId: string,
+        billingDetails?: StripeCustomerBillingDetails | null,
     ): Promise<string> {
+        const { data: company } = await supabase
+            .from('companies')
+            .select('name, legal_name, email, address, postal_code, city, country')
+            .eq('id', companyId)
+            .maybeSingle();
+        const resolvedBillingDetails: StripeCustomerBillingDetails | null = billingDetails || (
+            company
+                ? {
+                    email: company.email,
+                    name: company.legal_name || company.name,
+                    address: {
+                        line1: company.address,
+                        postal_code: company.postal_code,
+                        city: company.city,
+                        country: company.country || 'FR',
+                    },
+                }
+                : null
+        );
+
         const { data: companySubscription } = await supabase
             .from('subscriptions')
             .select('stripe_customer_id')
@@ -2205,6 +2331,11 @@ export class SubscriptionService {
             .maybeSingle();
 
         if (companySubscription?.stripe_customer_id) {
+            await this.updateStripeCustomerBillingDetails(
+                stripe,
+                companySubscription.stripe_customer_id,
+                resolvedBillingDetails,
+            );
             return companySubscription.stripe_customer_id;
         }
 
@@ -2218,6 +2349,11 @@ export class SubscriptionService {
             .maybeSingle();
 
         if (existingCustomerSubscription?.stripe_customer_id) {
+            await this.updateStripeCustomerBillingDetails(
+                stripe,
+                existingCustomerSubscription.stripe_customer_id,
+                resolvedBillingDetails,
+            );
             await supabase
                 .from('subscriptions')
                 .update({ stripe_customer_id: existingCustomerSubscription.stripe_customer_id })
@@ -2232,8 +2368,14 @@ export class SubscriptionService {
             .single();
 
         const customer = await stripe.customers.create({
-            email: profile?.email,
-            name: [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || undefined,
+            ...this.buildStripeCustomerParams({
+                email: resolvedBillingDetails?.email || profile?.email,
+                name:
+                    resolvedBillingDetails?.name
+                    || [profile?.first_name, profile?.last_name].filter(Boolean).join(' ')
+                    || undefined,
+                address: resolvedBillingDetails?.address,
+            }),
             metadata: { user_id: userId },
         });
 
@@ -2332,8 +2474,16 @@ export class SubscriptionService {
         }
 
         const customer = await stripe.customers.create({
-            email: normalizedEmail,
-            name: registrationData.company_name || `${dto.first_name} ${dto.last_name}`.trim(),
+            ...this.buildStripeCustomerParams({
+                email: normalizedEmail,
+                name: registrationData.company_name || `${dto.first_name} ${dto.last_name}`.trim(),
+                address: {
+                    line1: registrationData.address,
+                    postal_code: registrationData.postal_code,
+                    city: registrationData.city,
+                    country: registrationData.country || 'FR',
+                },
+            }),
             metadata: {
                 registration_session_id: createdSession.id,
                 registration_flow: 'true',
@@ -2345,6 +2495,7 @@ export class SubscriptionService {
             customer: customer.id,
             items: [{ price: pricingContext.basePriceId, quantity: 1 }],
             billing_mode: { type: 'flexible' },
+            automatic_tax: { enabled: true },
             payment_behavior: 'default_incomplete',
             payment_settings: {
                 save_default_payment_method: 'on_subscription',
@@ -2690,6 +2841,7 @@ export class SubscriptionService {
             customer: stripeCustomerId,
             items,
             billing_mode: { type: 'flexible' },
+            automatic_tax: { enabled: true },
             payment_behavior: 'default_incomplete',
             payment_settings: {
                 save_default_payment_method: 'on_subscription',
