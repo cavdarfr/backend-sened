@@ -1140,7 +1140,11 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_company_id UUID;
     v_siret text;
@@ -1357,7 +1361,7 @@ BEGIN
                 WHEN v_role = 'accountant' THEN 'active'
                 WHEN v_plan_id IS NOT NULL AND COALESCE(v_price_monthly, 0) = 0 AND COALESCE(v_price_yearly, 0) = 0 THEN 'active'
                 ELSE 'incomplete'
-            END)::subscription_status
+            END)::public.subscription_status
         )
         ON CONFLICT (company_id) DO UPDATE SET
             user_id = EXCLUDED.user_id,
@@ -1371,7 +1375,7 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
 -- Trigger pour créer automatiquement un profil lors de l'inscription
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;

@@ -49,10 +49,11 @@ export class AuthService {
         }
 
         if (existingCompany) {
+            const isAccountant = params.role === 'accountant';
             return {
                 available: false,
                 message:
-                    `Cette entreprise est déjà associée à un compte SENED. Si vous pensez devoir y accéder, contactez ${REGISTRATION_SUPPORT_EMAIL}.`,
+                    `${isAccountant ? 'Ce cabinet' : 'Cette entreprise'} est déjà associé à un compte SENED. Si vous pensez devoir y accéder, contactez ${REGISTRATION_SUPPORT_EMAIL}.`,
                 supportEmail: REGISTRATION_SUPPORT_EMAIL,
             };
         }

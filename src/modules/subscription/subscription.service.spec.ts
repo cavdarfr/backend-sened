@@ -211,6 +211,66 @@ function createChangePlanSupabaseMock() {
     };
 }
 
+function createSubscriptionUpdatedWebhookSupabaseMock() {
+    let updatedPayload: Record<string, any> | null = null;
+
+    return {
+        supabase: {
+            from: jest.fn((table: string) => {
+                if (table === 'subscriptions') {
+                    return {
+                        select: jest.fn(() => ({
+                            eq: jest.fn(() => ({
+                                maybeSingle: jest.fn().mockResolvedValue({
+                                    data: {
+                                        stripe_base_item_id: 'si_base_123',
+                                        stripe_member_item_id: null,
+                                    },
+                                }),
+                            })),
+                        })),
+                        update: jest.fn((payload: Record<string, any>) => {
+                            updatedPayload = payload;
+                            return {
+                                eq: jest.fn().mockResolvedValue({ error: null }),
+                            };
+                        }),
+                    };
+                }
+
+                if (table === 'subscription_plans') {
+                    return {
+                        select: jest.fn(() => ({
+                            eq: jest.fn(() => ({
+                                eq: jest.fn(() => ({
+                                    maybeSingle: jest.fn().mockResolvedValue({
+                                        data: { id: 'new_plan_123' },
+                                    }),
+                                })),
+                            })),
+                        })),
+                    };
+                }
+
+                if (table === 'registration_payment_sessions') {
+                    return {
+                        select: jest.fn(() => ({
+                            eq: jest.fn(() => ({
+                                is: jest.fn(() => ({
+                                    maybeSingle: jest.fn().mockResolvedValue({ data: null }),
+                                })),
+                            })),
+                        })),
+                    };
+                }
+
+                throw new Error(`Unexpected table: ${table}`);
+            }),
+        },
+        getUpdatedPayload: () => updatedPayload,
+    };
+}
+
 describe('buildSubscriptionMemberUsage', () => {
     it('includes pending merchant invitations in billable member counts', () => {
         expect(
@@ -601,9 +661,42 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             expect.objectContaining({
                 payment_behavior: 'pending_if_incomplete',
                 proration_behavior: 'always_invoice',
+                expand: ['latest_invoice.confirmation_secret', 'latest_invoice.payment_intent'],
             }),
         );
+        expect(stripeMock.subscriptions.update.mock.calls[0][1]).not.toHaveProperty(
+            'metadata',
+        );
         expect(result.client_secret).toBe('pi_secret_123');
+        expect(result.subscription.plan_id).toBe('old_plan_123');
+        expect(supabaseMock.getUpdatedPayload()).toBeNull();
+    });
+
+    it('returns a confirmation secret when Stripe exposes it on the latest invoice', async () => {
+        const supabaseMock = createChangePlanSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.mocked(resolveEffectiveSubscriptionTarget).mockResolvedValue({
+            can_manage_billing: true,
+            subscription_company_id: 'company_123',
+            owner_user_id: 'owner_123',
+            company_owner_role: 'merchant_admin',
+        } as any);
+        stripeMock.prices.list.mockResolvedValue({ data: [{ id: 'price_business_monthly' }] });
+        stripeMock.subscriptions.update.mockResolvedValue({
+            id: 'sub_123',
+            status: 'active',
+            pending_update: { expires_at: 1770000000 },
+            latest_invoice: {
+                confirmation_secret: {
+                    client_secret: 'cs_secret_123',
+                },
+            },
+        });
+
+        const result = await service.changePlan('owner_123', 'business', 'monthly', 'company_123');
+
+        expect(result.client_secret).toBe('cs_secret_123');
+        expect(result.status).toBe('requires_payment_confirmation');
         expect(result.subscription.plan_id).toBe('old_plan_123');
         expect(supabaseMock.getUpdatedPayload()).toBeNull();
     });
@@ -637,6 +730,45 @@ describe('SubscriptionService.syncMemberQuantity', () => {
         expect(supabaseMock.getUpdatedPayload()).toEqual(expect.objectContaining({
             plan_id: 'new_plan_123',
             billing_period: 'monthly',
+        }));
+    });
+
+    it('resolves the applied plan from the Stripe price lookup key when subscription metadata is absent', async () => {
+        const supabaseMock = createSubscriptionUpdatedWebhookSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.spyOn(service as any, 'getPendingCompanySessionByStripeSubscriptionId')
+            .mockResolvedValue(null);
+        jest.spyOn(service as any, 'prefillCompanyBankingBySubscriptionId')
+            .mockResolvedValue(undefined);
+
+        await service.handleWebhook({
+            type: 'customer.subscription.updated',
+            data: {
+                object: {
+                    id: 'sub_123',
+                    status: 'active',
+                    cancel_at_period_end: false,
+                    pending_update: null,
+                    metadata: {},
+                    items: {
+                        data: [{
+                            id: 'si_base_123',
+                            quantity: 1,
+                            current_period_end: 1770000000,
+                            price: {
+                                lookup_key: 'business_monthly',
+                                recurring: { interval: 'month' },
+                            },
+                        }],
+                    },
+                },
+            },
+        } as any);
+
+        expect(supabaseMock.getUpdatedPayload()).toEqual(expect.objectContaining({
+            plan_id: 'new_plan_123',
+            billing_period: 'monthly',
+            stripe_base_item_id: 'si_base_123',
         }));
     });
 

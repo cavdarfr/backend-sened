@@ -508,6 +508,14 @@ export class SubscriptionService {
     private getLatestInvoiceClientSecret(
         latestInvoice: Stripe.Invoice | null,
     ): string | null {
+        const confirmationSecret = (latestInvoice as any)?.confirmation_secret as
+            | { client_secret?: string | null }
+            | null
+            | undefined;
+        if (confirmationSecret?.client_secret) {
+            return confirmationSecret.client_secret;
+        }
+
         const paymentIntent = (latestInvoice as any)?.payment_intent as
             | Stripe.PaymentIntent
             | null
@@ -520,6 +528,29 @@ export class SubscriptionService {
         }
 
         return null;
+    }
+
+    private async resolvePlanIdFromStripeBasePrice(
+        supabase: ReturnType<typeof getSupabaseAdmin>,
+        baseItem: Stripe.SubscriptionItem | undefined,
+        billingPeriod: 'monthly' | 'yearly',
+    ): Promise<string | null> {
+        const lookupKey = baseItem?.price?.lookup_key;
+        if (!lookupKey) {
+            return null;
+        }
+
+        const lookupColumn = billingPeriod === 'yearly'
+            ? 'stripe_lookup_key_yearly'
+            : 'stripe_lookup_key_monthly';
+        const { data: plan } = await supabase
+            .from('subscription_plans')
+            .select('id')
+            .eq(lookupColumn, lookupKey)
+            .eq('is_active', true)
+            .maybeSingle();
+
+        return plan?.id || null;
     }
 
     private async getDefaultSubscriptionPaymentMethodType(
@@ -3019,8 +3050,17 @@ export class SubscriptionService {
                 const interval = baseItem?.price?.recurring?.interval;
                 const billingPeriod = interval === 'year' ? 'yearly' : 'monthly';
 
-                // Sync plan_id from metadata if available
-                const planId = sub.metadata?.plan_id;
+                // Sync plan_id from metadata when available. Pending updates
+                // cannot include metadata, so resolve the applied plan from the
+                // base Stripe Price lookup key after the update is settled.
+                const planId = sub.metadata?.plan_id
+                    || (!sub.pending_update
+                        ? await this.resolvePlanIdFromStripeBasePrice(
+                            supabase,
+                            baseItem,
+                            billingPeriod,
+                        )
+                        : null);
 
                 const updateData: Record<string, any> = {
                     status,
@@ -3557,13 +3597,7 @@ export class SubscriptionService {
             }],
             proration_behavior: 'always_invoice',
             payment_behavior: 'pending_if_incomplete',
-            metadata: {
-                user_id: ownerUserId,
-                company_id: subscriptionCompanyId,
-                plan_id: newPlan.id,
-                billing_period: effectiveBillingPeriod,
-            },
-            expand: ['latest_invoice.payment_intent'],
+            expand: ['latest_invoice.confirmation_secret', 'latest_invoice.payment_intent'],
         });
 
         const latestInvoice = updatedStripeSubscription.latest_invoice as Stripe.Invoice | null;

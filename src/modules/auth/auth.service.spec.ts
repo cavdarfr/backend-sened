@@ -6,7 +6,7 @@ jest.mock("../../config/supabase.config", () => ({
   getSupabaseClient: jest.fn(),
 }));
 
-describe("AuthService completeRegistration", () => {
+describe("AuthService", () => {
   let service: AuthService;
   let subscriptionService: { syncMemberQuantity: jest.Mock };
   let companyService: { acceptNewClientInvitationLinkRequest: jest.Mock };
@@ -25,6 +25,80 @@ describe("AuthService completeRegistration", () => {
     );
 
     jest.mocked(getSupabaseAdmin).mockReset();
+  });
+
+  describe("checkRegistrationAvailability", () => {
+    it("rejects an accountant signup when the cabinet SIREN already exists", async () => {
+      jest.mocked(getSupabaseAdmin).mockReturnValue({
+        from: jest.fn(() => ({
+          select: jest.fn(() => ({
+            eq: jest.fn(() => ({
+              maybeSingle: jest.fn().mockResolvedValue({
+                data: { id: "cabinet-1" },
+                error: null,
+              }),
+            })),
+          })),
+        })),
+      } as any);
+
+      await expect(
+        service.checkRegistrationAvailability({
+          siren: "123456789",
+          role: "accountant",
+          country: "FR",
+        }),
+      ).resolves.toEqual({
+        available: false,
+        message:
+          "Ce cabinet est déjà associé à un compte SENED. Si vous pensez devoir y accéder, contactez contact@sened.fr.",
+        supportEmail: "contact@sened.fr",
+      });
+    });
+
+    it("allows an accountant signup when the cabinet SIREN is available", async () => {
+      jest.mocked(getSupabaseAdmin).mockReturnValue({
+        from: jest.fn(() => ({
+          select: jest.fn(() => ({
+            eq: jest.fn(() => ({
+              maybeSingle: jest.fn().mockResolvedValue({
+                data: null,
+                error: null,
+              }),
+            })),
+          })),
+        })),
+      } as any);
+
+      await expect(
+        service.checkRegistrationAvailability({
+          siren: "123456789",
+          role: "accountant",
+          country: "FR",
+        }),
+      ).resolves.toEqual({ available: true });
+    });
+
+    it("does not block non-admin roles", async () => {
+      await expect(
+        service.checkRegistrationAvailability({
+          siren: "123456789",
+          role: "accountant_consultant",
+          country: "FR",
+        }),
+      ).resolves.toEqual({ available: true });
+      expect(getSupabaseAdmin).not.toHaveBeenCalled();
+    });
+
+    it("rejects invalid business identifiers for owner roles", async () => {
+      await expect(
+        service.checkRegistrationAvailability({
+          siren: "123",
+          role: "accountant",
+          country: "FR",
+        }),
+      ).rejects.toThrow("Le SIREN doit contenir 9 chiffres ou le SIRET 14 chiffres");
+    });
   });
 
   it("accepts a pending new client link request after the invited merchant completes registration", async () => {
