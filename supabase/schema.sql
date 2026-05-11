@@ -1333,7 +1333,7 @@ BEGIN
         END IF;
     END IF;
 
-    IF v_company_creation_mode = 'create' THEN
+    IF v_company_creation_mode = 'create' AND v_company_id IS NOT NULL THEN
         v_plan_id := NULL;
         v_price_monthly := NULL;
         v_price_yearly := NULL;
@@ -1363,7 +1363,7 @@ BEGIN
                 ELSE 'incomplete'
             END)::public.subscription_status
         )
-        ON CONFLICT (company_id) DO UPDATE SET
+        ON CONFLICT (company_id) WHERE company_id IS NOT NULL DO UPDATE SET
             user_id = EXCLUDED.user_id,
             plan_id = EXCLUDED.plan_id,
             status = EXCLUDED.status;
