@@ -2234,12 +2234,7 @@ export class SubscriptionService {
             latestInvoice,
             pricingContext.pricing,
         );
-
-        if (!clientSecret) {
-            throw new BadRequestException(
-                'Le service de paiement n’a pas pu initialiser le paiement. Réessayez dans quelques instants.',
-            );
-        }
+        const mappedStripeStatus = this.mapStripeStatus(stripeSubscription.status);
 
         const { error: updateError } = await supabase
             .from('pending_company_payment_sessions')
@@ -2252,13 +2247,41 @@ export class SubscriptionService {
                 stripe_subscription_id: stripeSubscription.id,
                 stripe_base_item_id: stripeSubscription.items.data[0]?.id || null,
                 stripe_member_item_id: null,
-                status: this.mapStripeStatus(stripeSubscription.status),
+                status: mappedStripeStatus,
                 updated_at: new Date().toISOString(),
             })
             .eq('id', session.id);
 
         if (updateError) {
             throw new BadRequestException(updateError.message);
+        }
+
+        if (!clientSecret && ['active', 'trialing'].includes(stripeSubscription.status)) {
+            return {
+                session_id: session.id,
+                subscription_id: stripeSubscription.id,
+                client_secret: null,
+                status: mappedStripeStatus,
+                pricing: appliedPricing,
+                company_summary: companySummary,
+            };
+        }
+
+        if (!clientSecret) {
+            const pendingSetupIntent = (stripeSubscription as any).pending_setup_intent;
+            console.error('Pending company Stripe init without client secret', {
+                sessionId: session.id,
+                subscriptionId: stripeSubscription.id,
+                subscriptionStatus: stripeSubscription.status,
+                latestInvoiceStatus: latestInvoice?.status || null,
+                paymentIntentStatus: paymentIntent?.status || null,
+                pendingSetupIntent: typeof pendingSetupIntent === 'string'
+                    ? pendingSetupIntent
+                    : pendingSetupIntent?.id || null,
+            });
+            throw new BadRequestException(
+                'Le service de paiement n’a pas pu initialiser le paiement. Réessayez dans quelques instants.',
+            );
         }
 
         return {

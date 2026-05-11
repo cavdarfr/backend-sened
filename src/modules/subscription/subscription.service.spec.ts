@@ -271,6 +271,45 @@ function createSubscriptionUpdatedWebhookSupabaseMock() {
     };
 }
 
+function createPendingCompanySubscriptionSupabaseMock() {
+    const updatedPayloads: Record<string, any>[] = [];
+
+    return {
+        supabase: {
+            from: jest.fn((table: string) => {
+                if (table === 'pending_company_payment_sessions') {
+                    return {
+                        update: jest.fn((payload: Record<string, any>) => {
+                            updatedPayloads.push(payload);
+                            const chain: any = {
+                                eq: jest.fn(() => chain),
+                                select: jest.fn(() => chain),
+                                single: jest.fn().mockResolvedValue({
+                                    data: {
+                                        id: 'pending_session_123',
+                                        user_id: 'user_123',
+                                        company_data: { name: 'Demo' },
+                                        status: 'draft',
+                                        stripe_customer_id: null,
+                                        stripe_subscription_id: null,
+                                    },
+                                    error: null,
+                                }),
+                                error: null,
+                            };
+                            return chain;
+                        }),
+                    };
+                }
+
+                throw new Error(`Unexpected table: ${table}`);
+            }),
+        },
+        getUpdatedPayloads: () => updatedPayloads,
+        getLastUpdatedPayload: () => updatedPayloads[updatedPayloads.length - 1] || null,
+    };
+}
+
 describe('buildSubscriptionMemberUsage', () => {
     it('includes pending merchant invitations in billable member counts', () => {
         expect(
@@ -770,6 +809,210 @@ describe('SubscriptionService.syncMemberQuantity', () => {
             billing_period: 'monthly',
             stripe_base_item_id: 'si_base_123',
         }));
+    });
+
+    it('returns a client secret for a pending company subscription when Stripe exposes a confirmation secret', async () => {
+        const supabaseMock = createPendingCompanySubscriptionSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.spyOn(service as any, 'getPendingCompanySessionForUser').mockResolvedValue({
+            id: 'pending_session_123',
+            user_id: 'user_123',
+            company_data: { name: 'Demo' },
+            plan_id: null,
+            plan_slug: null,
+            billing_period: null,
+            stripe_customer_id: null,
+            stripe_subscription_id: null,
+            stripe_base_item_id: null,
+            stripe_member_item_id: null,
+            status: 'draft',
+            finalized_company_id: null,
+        });
+        jest.spyOn(service as any, 'cancelPendingCompanyStripeSubscription').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'getOrCreateStripeCustomerForUser').mockResolvedValue('cus_123');
+        jest.spyOn(service as any, 'resolveRegistrationPricingContext').mockResolvedValue({
+            plan: { id: 'plan_123' },
+            basePriceId: 'price_123',
+            basePrice: { id: 'price_123', unit_amount: 990, currency: 'eur' },
+            pricing: {
+                original_amount_ht: 9.9,
+                discount_amount_ht: 0,
+                final_amount_ht: 9.9,
+                currency: 'EUR',
+                promotion_code: null,
+                coupon_name: null,
+                coupon_percent_off: null,
+                coupon_amount_off: null,
+            },
+            stripePromotionCodeId: null,
+        });
+        stripeMock.subscriptions.create.mockResolvedValue({
+            id: 'sub_123',
+            status: 'incomplete',
+            items: { data: [{ id: 'si_base_123' }] },
+            latest_invoice: {
+                status: 'open',
+                subtotal: 990,
+                total_discount_amounts: [],
+                confirmation_secret: { client_secret: 'cs_secret_123' },
+                payment_intent: null,
+            },
+        });
+
+        const result = await service.createPendingCompanySubscription('user_123', {
+            session_id: 'pending_session_123',
+            plan_slug: 'essentiel',
+            billing_period: 'monthly',
+        });
+
+        expect(result.client_secret).toBe('cs_secret_123');
+        expect(result.subscription_id).toBe('sub_123');
+        expect(supabaseMock.getLastUpdatedPayload()).toEqual(expect.objectContaining({
+            stripe_customer_id: 'cus_123',
+            stripe_subscription_id: 'sub_123',
+            stripe_base_item_id: 'si_base_123',
+            status: 'incomplete',
+        }));
+    });
+
+    it('accepts an active pending company subscription without a client secret', async () => {
+        const supabaseMock = createPendingCompanySubscriptionSupabaseMock();
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.spyOn(service as any, 'getPendingCompanySessionForUser').mockResolvedValue({
+            id: 'pending_session_123',
+            user_id: 'user_123',
+            company_data: { name: 'Demo' },
+            plan_id: null,
+            plan_slug: null,
+            billing_period: null,
+            stripe_customer_id: null,
+            stripe_subscription_id: null,
+            stripe_base_item_id: null,
+            stripe_member_item_id: null,
+            status: 'draft',
+            finalized_company_id: null,
+        });
+        jest.spyOn(service as any, 'cancelPendingCompanyStripeSubscription').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'getOrCreateStripeCustomerForUser').mockResolvedValue('cus_123');
+        jest.spyOn(service as any, 'resolveRegistrationPricingContext').mockResolvedValue({
+            plan: { id: 'plan_123' },
+            basePriceId: 'price_123',
+            basePrice: { id: 'price_123', unit_amount: 990, currency: 'eur' },
+            pricing: {
+                original_amount_ht: 9.9,
+                discount_amount_ht: 0,
+                final_amount_ht: 9.9,
+                currency: 'EUR',
+                promotion_code: null,
+                coupon_name: null,
+                coupon_percent_off: null,
+                coupon_amount_off: null,
+            },
+            stripePromotionCodeId: null,
+        });
+        stripeMock.subscriptions.create.mockResolvedValue({
+            id: 'sub_123',
+            status: 'active',
+            pending_setup_intent: 'seti_123',
+            items: { data: [{ id: 'si_base_123' }] },
+            latest_invoice: {
+                status: 'paid',
+                subtotal: 990,
+                total_discount_amounts: [],
+                confirmation_secret: null,
+                payment_intent: null,
+            },
+        });
+
+        const result = await service.createPendingCompanySubscription('user_123', {
+            session_id: 'pending_session_123',
+            plan_slug: 'essentiel',
+            billing_period: 'monthly',
+        });
+
+        expect(result.client_secret).toBeNull();
+        expect(result.status).toBe('active');
+        expect(result.subscription_id).toBe('sub_123');
+        expect(supabaseMock.getLastUpdatedPayload()).toEqual(expect.objectContaining({
+            stripe_customer_id: 'cus_123',
+            stripe_subscription_id: 'sub_123',
+            stripe_base_item_id: 'si_base_123',
+            status: 'active',
+        }));
+    });
+
+    it('stores Stripe identifiers before rejecting an incomplete pending company subscription without a client secret', async () => {
+        const supabaseMock = createPendingCompanySubscriptionSupabaseMock();
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+        jest.mocked(getSupabaseAdmin).mockReturnValue(supabaseMock.supabase as any);
+        jest.spyOn(service as any, 'getPendingCompanySessionForUser').mockResolvedValue({
+            id: 'pending_session_123',
+            user_id: 'user_123',
+            company_data: { name: 'Demo' },
+            plan_id: null,
+            plan_slug: null,
+            billing_period: null,
+            stripe_customer_id: null,
+            stripe_subscription_id: null,
+            stripe_base_item_id: null,
+            stripe_member_item_id: null,
+            status: 'draft',
+            finalized_company_id: null,
+        });
+        jest.spyOn(service as any, 'cancelPendingCompanyStripeSubscription').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'getOrCreateStripeCustomerForUser').mockResolvedValue('cus_123');
+        jest.spyOn(service as any, 'resolveRegistrationPricingContext').mockResolvedValue({
+            plan: { id: 'plan_123' },
+            basePriceId: 'price_123',
+            basePrice: { id: 'price_123', unit_amount: 990, currency: 'eur' },
+            pricing: {
+                original_amount_ht: 9.9,
+                discount_amount_ht: 0,
+                final_amount_ht: 9.9,
+                currency: 'EUR',
+                promotion_code: null,
+                coupon_name: null,
+                coupon_percent_off: null,
+                coupon_amount_off: null,
+            },
+            stripePromotionCodeId: null,
+        });
+        stripeMock.subscriptions.create.mockResolvedValue({
+            id: 'sub_123',
+            status: 'incomplete',
+            pending_setup_intent: null,
+            items: { data: [{ id: 'si_base_123' }] },
+            latest_invoice: {
+                status: 'open',
+                subtotal: 990,
+                total_discount_amounts: [],
+                confirmation_secret: null,
+                payment_intent: { id: 'pi_123', status: 'requires_payment_method' },
+            },
+        });
+
+        await expect(service.createPendingCompanySubscription('user_123', {
+            session_id: 'pending_session_123',
+            plan_slug: 'essentiel',
+            billing_period: 'monthly',
+        })).rejects.toThrow('Le service de paiement n’a pas pu initialiser le paiement.');
+
+        expect(supabaseMock.getLastUpdatedPayload()).toEqual(expect.objectContaining({
+            stripe_customer_id: 'cus_123',
+            stripe_subscription_id: 'sub_123',
+            stripe_base_item_id: 'si_base_123',
+            status: 'incomplete',
+        }));
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+            'Pending company Stripe init without client secret',
+            expect.objectContaining({
+                sessionId: 'pending_session_123',
+                subscriptionId: 'sub_123',
+                subscriptionStatus: 'incomplete',
+                latestInvoiceStatus: 'open',
+                paymentIntentStatus: 'requires_payment_method',
+            }),
+        );
     });
 
     it('validates a percent-off promotion code for registration pricing', async () => {
