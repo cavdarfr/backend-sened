@@ -2019,6 +2019,37 @@ export class CompanyService {
     });
   }
 
+  async unlinkLinkedClient(
+    userId: string,
+    accountantCompanyId: string,
+    clientId: string,
+  ): Promise<{ message: string }> {
+    const supabase = getSupabaseAdmin();
+
+    const userRole = await this.checkUserAccess(userId, accountantCompanyId);
+    if (userRole !== "accountant") {
+      throw new ForbiddenException(
+        "Seul un expert-comptable administrateur peut supprimer un dossier client",
+      );
+    }
+
+    await this.assertLinkedClientForAccountant(accountantCompanyId, clientId);
+
+    const { error } = await supabase
+      .from("companies")
+      .update({ accountant_company_id: null })
+      .eq("id", clientId)
+      .eq("accountant_company_id", accountantCompanyId);
+
+    if (error) {
+      throw new BadRequestException(
+        `Erreur lors de la suppression du dossier client: ${error.message}`,
+      );
+    }
+
+    return { message: "Dossier client supprimé du cabinet" };
+  }
+
   async getLinkedClientMerchantAdminInvitations(
     userId: string,
     accountantCompanyId: string,

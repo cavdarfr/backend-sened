@@ -340,6 +340,16 @@ export class CompanyController {
     return this.companyService.getLinkedClients(userId, id);
   }
 
+  @Delete(":id/linked-clients/:clientId")
+  @HttpCode(HttpStatus.OK)
+  async unlinkLinkedClient(
+    @CurrentUser("id") userId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("clientId", ParseUUIDPipe) clientId: string,
+  ): Promise<{ message: string }> {
+    return this.companyService.unlinkLinkedClient(userId, id, clientId);
+  }
+
   @Post(":id/invite-new-merchant-admin")
   @HttpCode(HttpStatus.CREATED)
   async inviteNewMerchantAdmin(

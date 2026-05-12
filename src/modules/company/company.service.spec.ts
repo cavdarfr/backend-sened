@@ -1436,4 +1436,85 @@ describe("CompanyService member management permissions", () => {
       }),
     ]);
   });
+
+  it("allows accountant to unlink a linked client without deleting the merchant company", async () => {
+    const updatePayloads: any[] = [];
+
+    jest.mocked(getSupabaseAdmin).mockReturnValue({
+      from: jest.fn((table: string) => {
+        if (table === "companies") {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn().mockReturnValue({
+                eq: jest.fn().mockReturnValue({
+                  single: jest.fn().mockResolvedValue({
+                    data: { id: "client-1" },
+                    error: null,
+                  }),
+                }),
+              }),
+            })),
+            update: jest.fn((payload) => {
+              updatePayloads.push(payload);
+              return {
+                eq: jest.fn().mockReturnValue({
+                  eq: jest.fn().mockResolvedValue({ error: null }),
+                }),
+              };
+            }),
+          };
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+    } as any);
+    mockUserRole("accountant");
+
+    await expect(
+      service.unlinkLinkedClient("user-1", "cabinet-1", "client-1"),
+    ).resolves.toEqual({ message: "Dossier client supprimé du cabinet" });
+
+    expect(updatePayloads).toEqual([{ accountant_company_id: null }]);
+  });
+
+  it("rejects accountant consultant unlinking a linked client", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({ from: jest.fn() } as any);
+    mockUserRole("accountant_consultant");
+
+    await expect(
+      service.unlinkLinkedClient("user-1", "cabinet-1", "client-1"),
+    ).rejects.toThrow(
+      new ForbiddenException(
+        "Seul un expert-comptable administrateur peut supprimer un dossier client",
+      ),
+    );
+  });
+
+  it("rejects unlinking a client that is not linked to the accountant firm", async () => {
+    jest.mocked(getSupabaseAdmin).mockReturnValue({
+      from: jest.fn((table: string) => {
+        if (table === "companies") {
+          return {
+            select: jest.fn(() => ({
+              eq: jest.fn().mockReturnValue({
+                eq: jest.fn().mockReturnValue({
+                  single: jest.fn().mockResolvedValue({
+                    data: null,
+                    error: null,
+                  }),
+                }),
+              }),
+            })),
+          };
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+    } as any);
+    mockUserRole("accountant");
+
+    await expect(
+      service.unlinkLinkedClient("user-1", "cabinet-1", "client-1"),
+    ).rejects.toThrow("Client non trouvé ou non lié à votre cabinet");
+  });
 });
